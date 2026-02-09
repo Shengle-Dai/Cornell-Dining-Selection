@@ -274,8 +274,10 @@ def build_email(
     def _pick_html(rank: int, pick: Dict[str, Any]) -> str:
         name = pick.get("eatery", "")
         why = pick.get("why", "")
-        label = "#1 Pick" if rank == 0 else "#2 Pick"
-        color = "#d35400" if rank == 0 else "#7f8c8d"
+        labels = {0: "#1 Pick", 1: "#2 Pick", 2: "#3 Pick"}
+        colors = {0: "#d35400", 1: "#7f8c8d", 2: "#7f8c8d"}
+        label = labels.get(rank, f"#{rank+1} Pick")
+        color = colors.get(rank, "#7f8c8d")
         location = loc.get(name, "")
         loc_line = f'<div style="color:#888;font-size:13px;">{location}</div>' if location else ""
         return (
@@ -296,7 +298,7 @@ def build_email(
         if not picks:
             inner = '<p style="color:#999;">No recommendation (no matching menu found).</p>'
         else:
-            for i, p in enumerate(picks[:2]):
+            for i, p in enumerate(picks[:3]):
                 inner += _pick_html(i, p)
         sections_html += (
             f'<div style="margin-bottom:24px;">'

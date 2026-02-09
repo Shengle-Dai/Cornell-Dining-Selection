@@ -1,6 +1,6 @@
 # Cornell Dining Selection
 
-Automated daily AI-powered dining recommendations from Cornell West Campus eateries, delivered via email.
+Automated daily AI-powered dining recommendations (top 3 picks per meal) from Cornell West Campus eateries, delivered via email.
 
 ## Setup
 
