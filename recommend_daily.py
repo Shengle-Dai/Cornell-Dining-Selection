@@ -1,15 +1,17 @@
+import asyncio
 import os
 import sys
 import json
+import re
 import smtplib
 from dataclasses import dataclass
 from datetime import datetime, timezone, date, time as dtime
 from email.message import EmailMessage
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
 from dotenv import load_dotenv
 from openai import OpenAI
+from playwright.async_api import async_playwright
 
 load_dotenv()  # no-op when .env is absent (e.g. GitHub Actions)
 
@@ -19,21 +21,19 @@ except ImportError:
     print("ERROR: zoneinfo not available. Use Python 3.9+.", file=sys.stderr)
     raise
 
-API_URL = "https://eatery-blue-backend.cornellappdev.com/eatery/"
 LOCAL_TZ = ZoneInfo("America/New_York")
 
-CAMPUS_AREA_ALLOWLIST = {"West"}
 EATERY_DENYLIST = {"104West!"}
 PROMPT_PATH = "prompt.md"
 
-# “Today” meal windows (local time). Adjust if desired.
+# "Today" meal windows (local time). Adjust if desired.
 MEAL_WINDOWS = {
     "breakfast_brunch": (dtime(6, 0), dtime(11, 0)),
     "lunch": (dtime(11, 0), dtime(16, 0)),
     "dinner": (dtime(16, 0), dtime(21, 0)),
 }
 
-# Map API event_description to our three buckets
+# Map meal title (with " Menu" stripped) to our three buckets
 EVENT_BUCKET = {
     "Breakfast": "breakfast_brunch",
     "Brunch": "breakfast_brunch",
@@ -60,172 +60,126 @@ def load_prompt() -> str:
         return f.read().strip()
 
 
-def fetch_eateries() -> List[Dict[str, Any]]:
-    r = requests.get(API_URL, timeout=25)
-    r.raise_for_status()
-    data = r.json()
-    if not isinstance(data, list):
-        raise ValueError("API response is not a list.")
-    return data
+async def scrape_menus(local_dt: datetime) -> Dict[str, List[MenuSlice]]:
+    by_bucket: Dict[str, List[MenuSlice]] = {k: [] for k in MEAL_WINDOWS}
 
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.goto("https://now.dining.cornell.edu/eateries", wait_until="networkidle")
 
-def epoch_to_local_dt(ts: int) -> datetime:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(LOCAL_TZ)
+        # Wait for cards to appear
+        await page.wait_for_selector("app-card", timeout=15000)
 
+        # Click the "West" campus tab
+        west_tab = page.locator("text=West").first
+        await west_tab.click()
+        await page.wait_for_timeout(1500)
 
-def overlaps(
-    a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime
-) -> bool:
-    return a_start < b_end and b_start < a_end
-
-
-def flatten_menu(menu_obj: Any) -> Tuple[List[str], List[str]]:
-    items: List[str] = []
-    cats: List[str] = []
-
-    if menu_obj is None:
-        return items, cats
-
-    if isinstance(menu_obj, list):
-        for cat in menu_obj:
-            if not isinstance(cat, dict):
-                continue
-            cat_name = cat.get("category")
-            if isinstance(cat_name, str) and cat_name.strip():
-                cats.append(cat_name.strip())
-            its = cat.get("items", [])
-            if isinstance(its, list):
-                for it in its:
-                    if isinstance(it, dict):
-                        nm = it.get("name")
-                        if isinstance(nm, str) and nm.strip():
-                            items.append(nm.strip())
-    elif isinstance(menu_obj, dict):
-        # Some endpoints occasionally return dict-ish shapes.
-        if "items" in menu_obj and isinstance(menu_obj.get("items"), list):
-            cat_name = menu_obj.get("category")
-            if isinstance(cat_name, str) and cat_name.strip():
-                cats.append(cat_name.strip())
-            for it in menu_obj["items"]:
-                if isinstance(it, dict):
-                    nm = it.get("name")
-                    if isinstance(nm, str) and nm.strip():
-                        items.append(nm.strip())
-        else:
-            nm = menu_obj.get("name")
-            if isinstance(nm, str) and nm.strip():
-                items.append(nm.strip())
-
-    # Deduplicate while preserving order (lightweight)
-    seen_i, seen_c = set(), set()
-    out_i, out_c = [], []
-    for x in items:
-        if x not in seen_i:
-            seen_i.add(x)
-            out_i.append(x)
-    for x in cats:
-        if x not in seen_c:
-            seen_c.add(x)
-            out_c.append(x)
-    return out_i, out_c
-
-
-def build_today_windows(local_dt: datetime) -> Dict[str, Tuple[datetime, datetime]]:
-    today = local_dt.date()
-    windows: Dict[str, Tuple[datetime, datetime]] = {}
-    for bucket, (t0, t1) in MEAL_WINDOWS.items():
-        start = datetime.combine(today, t0, tzinfo=LOCAL_TZ)
-        end = datetime.combine(today, t1, tzinfo=LOCAL_TZ)
-        windows[bucket] = (start, end)
-    return windows
-
-
-def extract_menu_slices(
-    eateries: List[Dict[str, Any]], local_dt: datetime
-) -> Dict[str, List[MenuSlice]]:
-    windows = build_today_windows(local_dt)
-    by_bucket: Dict[str, List[MenuSlice]] = {k: [] for k in MEAL_WINDOWS.keys()}
-
-    for e in eateries:
-        try:
-            if e.get("campus_area") not in CAMPUS_AREA_ALLOWLIST:
-                continue
-            if e.get("name") in EATERY_DENYLIST:
-                continue
-
-            name = e.get("name") or "Unknown"
-            location = e.get("location") or ""
-            menu_summary = (e.get("menu_summary") or "").strip()
-
-            events = e.get("events", [])
-            if not isinstance(events, list):
-                continue
-
-            # Accumulate per bucket per eatery
-            acc: Dict[str, Dict[str, Any]] = {}
-            for ev in events:
-                if not isinstance(ev, dict):
+        cards = await page.locator("app-card").all()
+        for card in cards:
+            try:
+                # Extract eatery name
+                name_el = card.locator(".eateries-name a")
+                name = (await name_el.text_content() or "").strip()
+                if not name or name in EATERY_DENYLIST:
                     continue
 
-                desc = ev.get("event_description")
-                if not isinstance(desc, str):
-                    continue
-                bucket = EVENT_BUCKET.get(desc.strip())
-                if bucket not in MEAL_WINDOWS:
-                    continue
+                # Extract location
+                location = ""
+                loc_spans = card.locator(".eateries-name span")
+                count = await loc_spans.count()
+                if count > 0:
+                    location = (await loc_spans.last.text_content() or "").strip()
 
-                start = ev.get("start")
-                end = ev.get("end")
-                if not isinstance(start, int) or not isinstance(end, int):
-                    continue
+                # Extract description (menu_summary)
+                menu_summary = ""
+                about_el = card.locator(".eateries-about-short")
+                if await about_el.count() > 0:
+                    menu_summary = (await about_el.first.text_content() or "").strip()
 
-                ev_start = epoch_to_local_dt(start)
-                ev_end = epoch_to_local_dt(end)
-
-                w_start, w_end = windows[bucket]
-                if not overlaps(ev_start, ev_end, w_start, w_end):
-                    continue
-
-                items, cats = flatten_menu(ev.get("menu"))
-
-                if bucket not in acc:
-                    acc[bucket] = {"descs": [], "items": [], "cats": []}
-                acc[bucket]["descs"].append(desc.strip())
-                acc[bucket]["items"].extend(items)
-                acc[bucket]["cats"].extend(cats)
-
-            for bucket, d in acc.items():
-                # Deduplicate again at bucket level
-                uniq_items = []
-                seen = set()
-                for x in d["items"]:
-                    if x not in seen:
-                        seen.add(x)
-                        uniq_items.append(x)
-
-                uniq_cats = []
-                seen = set()
-                for x in d["cats"]:
-                    if x not in seen:
-                        seen.add(x)
-                        uniq_cats.append(x)
-
-                if not uniq_items and not uniq_cats:
+                # Check for mat-expansion-panel menus (skip non-dining eateries)
+                panels = await card.locator("mat-expansion-panel").all()
+                if not panels:
                     continue
 
-                by_bucket[bucket].append(
-                    MenuSlice(
-                        eatery_name=name,
-                        location=location,
-                        bucket=bucket,
-                        event_descriptions=sorted(set(d["descs"])),
-                        categories=uniq_cats[:40],
-                        items=uniq_items[:120],
-                        menu_summary=menu_summary,
+                # Accumulate per bucket
+                acc: Dict[str, Dict[str, Any]] = {}
+
+                for panel in panels:
+                    # Extract meal name from panel title
+                    title_el = panel.locator("mat-panel-title")
+                    title_text = (await title_el.text_content() or "").strip()
+                    # Strip " Menu" suffix: "Breakfast Menu" -> "Breakfast"
+                    meal_name = re.sub(r"\s*Menu\s*$", "", title_text).strip()
+
+                    bucket = EVENT_BUCKET.get(meal_name)
+                    if not bucket:
+                        continue
+
+                    # Click to expand the panel to reveal menu content
+                    await panel.click()
+                    await page.wait_for_timeout(300)
+
+                    # Extract categories
+                    cat_els = await panel.locator(".eateries-menu-category").all()
+                    cats = []
+                    for cel in cat_els:
+                        ct = (await cel.text_content() or "").strip()
+                        if ct:
+                            cats.append(ct)
+
+                    # Extract items (separated by " • ")
+                    item_els = await panel.locator(".eateries-menu-items").all()
+                    items = []
+                    for iel in item_els:
+                        raw = (await iel.text_content() or "").strip()
+                        if raw:
+                            for part in raw.split(" • "):
+                                part = part.strip()
+                                if part:
+                                    items.append(part)
+
+                    if bucket not in acc:
+                        acc[bucket] = {"descs": [], "items": [], "cats": []}
+                    acc[bucket]["descs"].append(meal_name)
+                    acc[bucket]["items"].extend(items)
+                    acc[bucket]["cats"].extend(cats)
+
+                for bucket, d in acc.items():
+                    # Deduplicate while preserving order
+                    seen = set()
+                    uniq_items = []
+                    for x in d["items"]:
+                        if x not in seen:
+                            seen.add(x)
+                            uniq_items.append(x)
+
+                    seen = set()
+                    uniq_cats = []
+                    for x in d["cats"]:
+                        if x not in seen:
+                            seen.add(x)
+                            uniq_cats.append(x)
+
+                    if not uniq_items and not uniq_cats:
+                        continue
+
+                    by_bucket[bucket].append(
+                        MenuSlice(
+                            eatery_name=name,
+                            location=location,
+                            bucket=bucket,
+                            event_descriptions=sorted(set(d["descs"])),
+                            categories=uniq_cats[:40],
+                            items=uniq_items[:120],
+                            menu_summary=menu_summary,
+                        )
                     )
-                )
-        except Exception:
-            continue
+            except Exception:
+                continue
+
+        await browser.close()
 
     return by_bucket
 
@@ -321,7 +275,7 @@ def build_email(
         f'{date_str} &middot; {local_dt.strftime("%I:%M %p %Z").lstrip("0")}</p>'
         f'{sections_html}'
         f'<hr style="border:none;border-top:1px solid #eee;margin:20px 0 12px 0;">'
-        f'<p style="font-size:11px;color:#aaa;">Data: Cornell AppDev Eatery API</p>'
+        f'<p style="font-size:11px;color:#aaa;">Data: now.dining.cornell.edu</p>'
         f'</div>'
     )
     return subject, html
@@ -347,12 +301,11 @@ def send_email(subject: str, body: str) -> None:
         smtp.send_message(msg)
 
 
-def main() -> int:
+async def main() -> int:
     local_dt = datetime.now(LOCAL_TZ)
 
     prompt = load_prompt()
-    eateries = fetch_eateries()
-    menus = extract_menu_slices(eateries, local_dt)
+    menus = await scrape_menus(local_dt)
 
     payload = {
         "date_local": local_dt.strftime("%Y-%m-%d"),
@@ -382,4 +335,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(asyncio.run(main()))
