@@ -9,7 +9,7 @@ Constraints:
 User profile:
 
 - Chinese international student
-- Likes: french fries, drumsticks, typical Chinese food, meat burgers, pho.
+- Likes: french fries, drumsticks, typical Chinese food, meat burgers, pho, nuggets.
 - Dislikes: buffalo sauce
 
 Decision rules:
