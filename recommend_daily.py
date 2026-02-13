@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import hmac
 import os
 import sys
 import json
@@ -9,6 +11,7 @@ from datetime import datetime
 from email.message import EmailMessage
 from html import escape
 from typing import Any, Dict, List, Tuple
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -252,8 +255,43 @@ def sanitize_result(
     return result
 
 
+def generate_unsub_token(email: str, secret: str) -> str:
+    """Generate an HMAC-SHA256 token for unsubscribe links."""
+    return hmac.new(secret.encode(), email.lower().encode(), hashlib.sha256).hexdigest()
+
+
+def fetch_subscribers_from_kv() -> List[str]:
+    """Fetch confirmed subscriber emails from Cloudflare Workers KV.
+
+    Requires WORKER_BASE_URL and HMAC_SECRET env vars.
+    Returns empty list if not configured (falls back to TO_EMAIL).
+    """
+    worker_url = os.environ.get("WORKER_BASE_URL", "").strip().rstrip("/")
+    hmac_secret = os.environ.get("HMAC_SECRET", "").strip()
+
+    if not worker_url or not hmac_secret:
+        return []
+
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{worker_url}/api/subscribers",
+        headers={"Authorization": f"Bearer {hmac_secret}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get("subscribers", [])
+    except Exception as e:
+        print(f"WARNING: failed to fetch subscribers from KV: {e}", file=sys.stderr)
+        return []
+
+
 def build_email(
-    local_dt: datetime, result: Dict[str, Any], menus: Dict[str, List[MenuSlice]]
+    local_dt: datetime,
+    result: Dict[str, Any],
+    menus: Dict[str, List[MenuSlice]],
+    unsubscribe_url: str = "",
 ) -> Tuple[str, str]:
     date_str = local_dt.strftime("%a, %b %d, %Y")
     subject = f"West Campus Dining Picks — {date_str}"
@@ -312,6 +350,15 @@ def build_email(
             f'</div>'
         )
 
+    # Unsubscribe footer
+    unsub_line = ""
+    if unsubscribe_url:
+        unsub_line = (
+            f'<p style="font-size:11px;color:#aaa;margin-top:8px;">'
+            f'<a href="{escape(unsubscribe_url)}" style="color:#aaa;">'
+            f'Unsubscribe from daily picks</a></p>'
+        )
+
     html = (
         f'<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
         f'max-width:520px;margin:0 auto;padding:16px;">'
@@ -322,29 +369,70 @@ def build_email(
         f'{sections_html}'
         f'<hr style="border:none;border-top:1px solid #eee;margin:20px 0 12px 0;">'
         f'<p style="font-size:11px;color:#aaa;">Data: now.dining.cornell.edu</p>'
+        f'{unsub_line}'
         f'</div>'
     )
     return subject, html
 
 
-def send_email(subject: str, body: str) -> None:
+def send_emails(
+    subject: str,
+    result: Dict[str, Any],
+    menus: Dict[str, List[MenuSlice]],
+    local_dt: datetime,
+) -> None:
+    """Send individual emails with personalized unsubscribe links.
+
+    Tries Cloudflare KV subscribers first; falls back to TO_EMAIL env var.
+    """
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_app_password = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
-    to_emails = [e.strip() for e in os.environ.get("TO_EMAIL", "").split(",") if e.strip()]
+    hmac_secret = os.environ.get("HMAC_SECRET", "").strip()
+    worker_url = os.environ.get("WORKER_BASE_URL", "").strip().rstrip("/")
 
-    if not gmail_user or not gmail_app_password or not to_emails:
-        raise RuntimeError("Missing env vars: GMAIL_USER, GMAIL_APP_PASSWORD, TO_EMAIL")
+    if not gmail_user or not gmail_app_password:
+        raise RuntimeError("Missing env vars: GMAIL_USER, GMAIL_APP_PASSWORD")
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = gmail_user
-    msg["To"] = ", ".join(to_emails)
-    msg.set_content("View this email in an HTML-capable client.")
-    msg.add_alternative(body, subtype="html")
+    # Try KV subscribers first, fall back to TO_EMAIL
+    kv_subscribers = fetch_subscribers_from_kv()
+    if kv_subscribers:
+        to_emails = kv_subscribers
+        print(f"Sending to {len(to_emails)} KV subscriber(s).")
+    else:
+        to_emails = [
+            e.strip()
+            for e in os.environ.get("TO_EMAIL", "").split(",")
+            if e.strip()
+        ]
+        print(f"KV not configured; falling back to TO_EMAIL ({len(to_emails)} recipient(s)).")
+
+    if not to_emails:
+        raise RuntimeError("No subscribers found (KV empty and TO_EMAIL not set)")
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
         smtp.login(gmail_user, gmail_app_password)
-        smtp.send_message(msg)
+
+        for recipient in to_emails:
+            # Build personalized unsubscribe URL
+            unsub_url = ""
+            if hmac_secret and worker_url:
+                token = generate_unsub_token(recipient, hmac_secret)
+                unsub_url = (
+                    f"{worker_url}/api/unsubscribe"
+                    f"?email={quote(recipient)}&token={token}"
+                )
+
+            _, body = build_email(local_dt, result, menus, unsub_url)
+
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = gmail_user
+            msg["To"] = recipient
+            msg.set_content("View this email in an HTML-capable client.")
+            msg.add_alternative(body, subtype="html")
+
+            smtp.send_message(msg)
+            print(f"  → Sent to {recipient}")
 
 
 async def main() -> int:
@@ -375,9 +463,9 @@ async def main() -> int:
 
     result = call_llm(prompt, payload)
     result = sanitize_result(result, menus)
-    subject, body = build_email(local_dt, result, menus)
-    send_email(subject, body)
-    print("Email sent.")
+    subject, _ = build_email(local_dt, result, menus)
+    send_emails(subject, result, menus, local_dt)
+    print("All emails sent.")
     return 0
 
 

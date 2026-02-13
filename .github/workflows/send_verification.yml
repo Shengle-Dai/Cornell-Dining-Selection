@@ -1,0 +1,67 @@
+name: Send Verification Email
+
+on:
+  repository_dispatch:
+    types: [send_verification]
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Send verification email
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TARGET_EMAIL: ${{ github.event.client_payload.email }}
+          CONFIRM_URL: ${{ github.event.client_payload.confirm_url }}
+        run: |
+          python -c "
+          import smtplib, os
+          from email.message import EmailMessage
+
+          gmail_user = os.environ['GMAIL_USER']
+          gmail_pass = os.environ['GMAIL_APP_PASSWORD']
+          to_email   = os.environ['TARGET_EMAIL']
+          confirm_url = os.environ['CONFIRM_URL']
+
+          html = f'''
+          <div style=\"font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+                      max-width:480px;margin:0 auto;padding:32px;\">
+            <h1 style=\"font-size:22px;color:#2c3e50;margin:0 0 16px 0;\">
+              Confirm Your Subscription
+            </h1>
+            <p style=\"color:#555;font-size:14px;line-height:1.6;margin:0 0 24px 0;\">
+              You (or someone) requested daily West Campus dining recommendations
+              to be sent to <strong>{to_email}</strong>.
+            </p>
+            <a href=\"{confirm_url}\"
+               style=\"display:inline-block;padding:12px 28px;background:linear-gradient(135deg,#e67e22,#d35400);
+                      color:#fff;text-decoration:none;border-radius:8px;font-weight:600;font-size:15px;\">
+              Confirm Subscription
+            </a>
+            <p style=\"color:#999;font-size:12px;margin:24px 0 0 0;\">
+              If you didn't request this, just ignore this email.
+            </p>
+          </div>
+          '''
+
+          msg = EmailMessage()
+          msg['Subject'] = 'Confirm: Cornell West Campus Dining Picks'
+          msg['From'] = gmail_user
+          msg['To'] = to_email
+          msg.set_content('Click this link to confirm: ' + confirm_url)
+          msg.add_alternative(html, subtype='html')
+
+          with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as smtp:
+              smtp.login(gmail_user, gmail_pass)
+              smtp.send_message(msg)
+
+          print(f'Verification email sent to {to_email}')
+          "

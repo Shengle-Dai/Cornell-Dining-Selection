@@ -1,2 +1,4 @@
 .env
 __pycache__
+worker/node_modules/
+worker/.dev.vars

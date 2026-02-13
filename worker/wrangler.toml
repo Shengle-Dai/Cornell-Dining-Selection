@@ -1,0 +1,17 @@
+name = "cornell-dining-subscribe"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "SUBSCRIBERS"
+id = "d2d198b2f26a48399c4acb113c4911d7"
+# preview_id = "YOUR_PREVIEW_KV_NAMESPACE_ID"
+
+# Non-secret config (available in env automatically)
+[vars]
+GITHUB_OWNER = "Shengle-Dai"
+GITHUB_REPO = "Cornell-Dining-Selection"
+
+# Secrets (set via `wrangler secret put` for production,
+# or add to .dev.vars for local dev):
+# HMAC_SECRET, GITHUB_TOKEN

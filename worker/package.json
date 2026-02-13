@@ -1,0 +1,13 @@
+{
+  "name": "cornell-dining-subscribe",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "sync-env": "node -e \"const fs=require('fs'); const lines=fs.readFileSync('../.env','utf8').split(/\\r?\\n/); const keys=['HMAC_SECRET','GITHUB_TOKEN']; const out=lines.filter(l=>keys.some(k=>l.startsWith(k+'='))).join('\\n')+'\\n'; fs.writeFileSync('.dev.vars',out); console.log('Synced .dev.vars from ../.env');\"",
+    "dev": "npm run sync-env && wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
