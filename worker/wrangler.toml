@@ -9,9 +9,9 @@ id = "d2d198b2f26a48399c4acb113c4911d7"
 
 # Non-secret config (available in env automatically)
 [vars]
-GITHUB_OWNER = "Shengle-Dai"
-GITHUB_REPO = "Cornell-Dining-Selection"
+GH_OWNER = "Shengle-Dai"
+GH_REPO = "Cornell-Dining-Selection"
 
 # Secrets (set via `wrangler secret put` for production,
 # or add to .dev.vars for local dev):
-# HMAC_SECRET, GITHUB_TOKEN
+# HMAC_SECRET, GH_PAT_TOKEN
