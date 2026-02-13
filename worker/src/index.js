@@ -203,6 +203,85 @@ function pageShell(title, content) {
       max-width: 160px;
     }
     
+    /* Email Sample Preview */
+    .email-preview {
+      margin-top: 60px;
+      padding: 0 20px;
+      animation: fadeUp 1s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+      animation-delay: 0.8s;
+      opacity: 0;
+      width: 100%;
+      max-width: 480px;
+      box-sizing: border-box;
+    }
+    .email-card {
+      border: 1px solid #eaeaea;
+      background: #fafafa;
+      padding: 32px;
+      text-align: left;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .email-meta {
+      font-size: 11px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+    }
+    .meal-section {
+      margin-bottom: 24px;
+    }
+    .meal-title {
+      font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+      font-size: 18px;
+      color: var(--cornell-red);
+      margin: 0 0 16px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .pick-item {
+      margin-bottom: 16px;
+    }
+    .pick-header {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin: 0 0 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .pick-rank {
+      color: var(--cornell-red);
+      font-size: 11px;
+      background: rgba(179, 27, 27, 0.06);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .pick-menu {
+      font-size: 13px;
+      color: #666;
+      line-height: 1.4;
+      margin: 0;
+      padding-left: 0;
+      list-style: none;
+    }
+    .pick-menu li {
+      margin-bottom: 2px;
+      position: relative;
+      padding-left: 12px;
+    }
+    .pick-menu li::before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      color: #ddd;
+    }
+    
     @keyframes fadeUp {
       from { opacity: 0; transform: translateY(20px); }
       to { opacity: 1; transform: translateY(0); }
@@ -264,6 +343,42 @@ function subscribePage() {
         </div>
         <h3>You Eat</h3>
         <p>A clean daily email. No spam, just food.</p>
+      </div>
+    </div>
+
+    <!-- Email Preview -->
+    <div class="email-preview">
+      <div class="email-card">
+        <div class="email-meta">
+          <span>Fri, Feb 13</span>
+          <span>Sample Email</span>
+        </div>
+        
+        <div class="meal-section">
+          <h2 class="meal-title">Lunch</h2>
+          
+          <div class="pick-item">
+            <div class="pick-header">
+              <span class="pick-rank">#1</span>
+              <span>Becker House</span>
+            </div>
+            <ul class="pick-menu">
+              <li>Sweet Chili Chicken Drumsticks</li>
+              <li>Tofu & Vegetable Lo Mein</li>
+            </ul>
+          </div>
+
+          <div class="pick-item">
+            <div class="pick-header">
+              <span class="pick-rank">#2</span>
+              <span>Bethe House</span>
+            </div>
+            <ul class="pick-menu">
+              <li>Sweet & Sour Pork</li>
+              <li>Orange Tofu Stir Fry</li>
+            </ul>
+          </div>
+        </div>
       </div>
     </div>
     `
