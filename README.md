@@ -1,4 +1,4 @@
-# Cornell Dining Selection
+# Campus Meal Pick (CMP)
 
 Automated daily AI-powered dining recommendations (top 3 picks per meal) from Cornell West Campus eateries, delivered via email.
 

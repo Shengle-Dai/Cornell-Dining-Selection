@@ -294,7 +294,7 @@ def build_email(
     unsubscribe_url: str = "",
 ) -> Tuple[str, str]:
     date_str = local_dt.strftime("%a, %b %d, %Y")
-    subject = f"West Campus Dining Picks — {date_str}"
+    subject = f"CMP — West Campus Dining Picks — {date_str}"
 
     # Location lookup
     loc: Dict[str, str] = {}
@@ -363,7 +363,7 @@ def build_email(
         f'<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
         f'max-width:520px;margin:0 auto;padding:16px;">'
         f'<h1 style="font-size:22px;color:#2c3e50;margin:0 0 4px 0;">'
-        f'West Campus Dining Picks</h1>'
+        f'Campus Meal Pick</h1>'
         f'<p style="color:#888;font-size:13px;margin:0 0 20px 0;">'
         f'{date_str} &middot; {local_dt.strftime("%I:%M %p %Z").lstrip("0")}</p>'
         f'{sections_html}'

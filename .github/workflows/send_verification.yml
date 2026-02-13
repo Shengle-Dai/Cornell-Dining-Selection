@@ -52,7 +52,7 @@ jobs:
           '''
 
           msg = EmailMessage()
-          msg['Subject'] = 'Confirm: Cornell West Campus Dining Picks'
+          msg['Subject'] = 'Confirm: Campus Meal Pick Subscription'
           msg['From'] = gmail_user
           msg['To'] = to_email
           msg.set_content('Click this link to confirm: ' + confirm_url)

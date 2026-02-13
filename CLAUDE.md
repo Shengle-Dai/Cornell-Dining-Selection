@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Cornell Dining Selection is an automated pipeline that scrapes daily menus from Cornell's West Campus dining halls, analyzes them with an LLM, and emails personalized recommendations to subscribers. Three main components:
+Campus Meal Pick (CMP) is an automated pipeline that scrapes daily menus from Cornell's West Campus dining halls, analyzes them with an LLM, and emails personalized recommendations to subscribers. Three main components:
 
 1. **Python recommender** (`recommend_daily.py`) — scrapes menus via Playwright, calls Groq LLM, sends HTML emails via Gmail SMTP
 2. **Cloudflare Worker** (`worker/src/index.js`) — subscription API with HMAC-verified subscribe/confirm/unsubscribe endpoints, backed by Cloudflare KV
@@ -32,7 +32,7 @@ Wrangler secrets (production): `wrangler secret put HMAC_SECRET` and `wrangler s
 ## Architecture & Data Flow
 
 ```
-Cornell Dining Website → Playwright scrape → MenuSlice[] (by meal bucket)
+Dining Website → Playwright scrape → MenuSlice[] (by meal bucket)
   → Groq LLM (prompt.md as system prompt) → JSON top-3 picks per meal
   → Sanitize & validate against scraped data
   → Build HTML email → Fetch subscribers from Worker KV (fallback: TO_EMAIL env var)

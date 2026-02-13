@@ -1,4 +1,4 @@
-name: Eatery West Campus Recommendation
+name: CMP Daily Recommendation
 
 on:
   schedule:

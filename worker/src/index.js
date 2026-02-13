@@ -1,5 +1,5 @@
 /**
- * Cornell Dining Subscribe/Unsubscribe Worker
+ * Campus Meal Pick (CMP) Subscribe/Unsubscribe Worker
  *
  * Endpoints:
  *   GET  /                     — Subscribe form
@@ -162,7 +162,7 @@ const icons = {
 
 function subscribePage() {
   return pageShell(
-    "Cornell Dining Picks",
+    "Campus Meal Pick",
     `
     <h1>Daily Dining Picks</h1>
     <p>Curated recommendations for West Campus.</p>
@@ -231,7 +231,7 @@ async function handleSubscribe(request, env) {
       headers: {
         Authorization: `Bearer ${env.GH_PAT_TOKEN}`,
         Accept: "application/vnd.github+json",
-        "User-Agent": "cornell-dining-worker",
+        "User-Agent": "campus-meal-pick-worker",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
