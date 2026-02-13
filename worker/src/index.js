@@ -42,100 +42,147 @@ async function hmacVerify(secret, data, token) {
 
 // ─── HTML templates ─────────────────────────────────────────────────────────
 
-function pageShell(title, bodyHtml) {
+// ─── HTML templates ─────────────────────────────────────────────────────────
+
+function pageShell(title, content) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title}</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --cornell-red: #B31B1B; --text: #222; --text-light: #555; --bg: #ffffff; }
     body {
-      font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 24px;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
     }
-    .card {
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 16px;
-      padding: 40px;
-      max-width: 440px;
+    .container {
+      max-width: 400px;
       width: 100%;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      text-align: center;
     }
-    h1 { font-size: 24px; color: #f8fafc; margin-bottom: 8px; }
-    p { font-size: 14px; color: #94a3b8; line-height: 1.6; margin-bottom: 20px; }
-    label { font-size: 13px; color: #cbd5e1; display: block; margin-bottom: 6px; }
-    input[type="email"] {
+    h1 {
+      font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif; /* Cornell-esque serif */
+      color: var(--cornell-red);
+      font-size: 24px;
+      font-weight: 600;
+      margin: 0 0 16px;
+      letter-spacing: -0.01em;
+    }
+    p {
+      color: var(--text-light);
+      font-size: 16px;
+      line-height: 1.5;
+      margin: 0 0 32px;
+    }
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    input {
       width: 100%;
-      padding: 12px 16px;
-      border: 1px solid #475569;
-      border-radius: 8px;
-      background: #0f172a;
-      color: #f1f5f9;
-      font-size: 15px;
+      padding: 12px 0;
+      border: none;
+      border-bottom: 2px solid #eee;
+      font-size: 16px;
       outline: none;
+      border-radius: 0;
+      background: transparent;
+      text-align: center;
       transition: border-color 0.2s;
+      color: var(--text);
     }
-    input[type="email"]:focus { border-color: #e67e22; }
+    input:focus {
+      border-bottom-color: var(--cornell-red);
+    }
+    input::placeholder {
+      color: #aaa;
+    }
     button {
       width: 100%;
-      padding: 12px;
-      margin-top: 16px;
-      border: none;
-      border-radius: 8px;
-      background: linear-gradient(135deg, #e67e22, #d35400);
-      color: #fff;
-      font-size: 15px;
+      padding: 14px;
+      margin-top: 10px;
+      background: transparent;
+      color: var(--cornell-red);
+      border: 1px solid var(--cornell-red);
+      border-radius: 4px;
+      font-size: 14px;
       font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
       cursor: pointer;
-      transition: opacity 0.2s;
+      transition: all 0.2s;
     }
-    button:hover { opacity: 0.9; }
-    .msg { text-align: center; }
-    .msg.success { color: #4ade80; }
-    .msg.error { color: #f87171; }
-    .emoji { font-size: 48px; margin-bottom: 16px; display: block; text-align: center; }
-    .footer { font-size: 11px; color: #475569; text-align: center; margin-top: 24px; }
+    button:hover {
+      background: var(--cornell-red);
+      color: white;
+    }
+    .icon {
+      margin-bottom: 24px;
+      color: var(--cornell-red);
+    }
+    .icon svg {
+      width: 32px;
+      height: 32px;
+    }
+    .footer {
+      margin-top: 40px;
+      font-size: 12px;
+      color: #999;
+      font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+      font-style: italic;
+    }
+    a { color: var(--cornell-red); text-decoration: none; }
+    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <div class="card">${bodyHtml}</div>
+  <div class="container">${content}</div>
 </body>
 </html>`;
 }
 
+const icons = {
+  // Minimalist icons
+  email: `<div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg></div>`,
+  success: `<div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 13l4 4L19 7" /></svg></div>`,
+  error: `<div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12" /></svg></div>`,
+  info: `<div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>`
+};
+
 function subscribePage() {
   return pageShell(
-    "Cornell West Campus Dining Picks",
+    "Cornell Dining Picks",
     `
-    <span class="emoji">🍽️</span>
     <h1>Daily Dining Picks</h1>
-    <p>Get daily AI-powered dining recommendations for Cornell's West Campus, delivered to your inbox every morning.</p>
+    <p>Curated recommendations for West Campus.</p>
     <form method="POST" action="/api/subscribe">
-      <label for="email">Email address</label>
-      <input type="email" id="email" name="email" placeholder="netid@cornell.edu" required>
+      <input type="email" name="email" placeholder="netid@cornell.edu" required aria-label="Email address" autocomplete="email">
       <button type="submit">Subscribe</button>
     </form>
-    <div class="footer">We'll send a confirmation email to verify your address.</div>
+    <div class="footer">Verification email will be sent.</div>
     `
   );
 }
 
-function resultPage(emoji, title, message, isError = false) {
+function resultPage(type, title, message) {
+  const icon = icons[type] || icons.info;
   return pageShell(
     title,
     `
-    <span class="emoji">${emoji}</span>
+    ${icon}
     <h1>${title}</h1>
-    <p class="msg ${isError ? "error" : "success"}">${message}</p>
+    <p>${message}</p>
     `
   );
 }
@@ -157,7 +204,7 @@ async function handleSubscribe(request, env) {
   // Basic validation
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return new Response(
-      resultPage("⚠️", "Invalid Email", "Please enter a valid email address.", true),
+      resultPage("error", "Invalid Email", "Please enter a valid email address."),
       { status: 400, headers: { "Content-Type": "text/html" } }
     );
   }
@@ -166,7 +213,7 @@ async function handleSubscribe(request, env) {
   const existing = await env.SUBSCRIBERS.get(`sub:${email}`);
   if (existing) {
     return new Response(
-      resultPage("📬", "Already Subscribed", "This email is already receiving daily dining picks!"),
+      resultPage("info", "Already Subscribed", "This email is already receiving daily dining picks!"),
       { headers: { "Content-Type": "text/html" } }
     );
   }
@@ -178,11 +225,11 @@ async function handleSubscribe(request, env) {
 
   // Trigger GitHub Actions to send verification email
   const dispatchRes = await fetch(
-    `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/dispatches`,
+    `https://api.github.com/repos/${env.GH_OWNER}/${env.GH_REPO}/dispatches`,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+        Authorization: `Bearer ${env.GH_PAT_TOKEN}`,
         Accept: "application/vnd.github+json",
         "User-Agent": "cornell-dining-worker",
         "Content-Type": "application/json",
@@ -201,14 +248,14 @@ async function handleSubscribe(request, env) {
     const errText = await dispatchRes.text();
     console.error("GitHub dispatch failed:", dispatchRes.status, errText);
     return new Response(
-      resultPage("❌", "Something Went Wrong", "Failed to send verification email. Please try again later.", true),
+      resultPage("error", "Something Went Wrong", "Failed to send verification email. Please try again later."),
       { status: 500, headers: { "Content-Type": "text/html" } }
     );
   }
 
   return new Response(
     resultPage(
-      "📧",
+      "email",
       "Check Your Inbox",
       `We've sent a confirmation email to <strong>${email}</strong>. Click the link inside to activate your subscription. (It may take up to a minute to arrive.)`
     ),
@@ -223,7 +270,7 @@ async function handleConfirm(request, env) {
 
   if (!email || !token) {
     return new Response(
-      resultPage("⚠️", "Invalid Link", "This confirmation link is invalid.", true),
+      resultPage("error", "Invalid Link", "This confirmation link is invalid."),
       { status: 400, headers: { "Content-Type": "text/html" } }
     );
   }
@@ -231,7 +278,7 @@ async function handleConfirm(request, env) {
   const valid = await hmacVerify(env.HMAC_SECRET, email, token);
   if (!valid) {
     return new Response(
-      resultPage("🚫", "Invalid Token", "This confirmation link is invalid or has been tampered with.", true),
+      resultPage("error", "Invalid Token", "This confirmation link is invalid or has been tampered with."),
       { status: 403, headers: { "Content-Type": "text/html" } }
     );
   }
@@ -240,7 +287,7 @@ async function handleConfirm(request, env) {
   const existing = await env.SUBSCRIBERS.get(`sub:${email}`);
   if (existing) {
     return new Response(
-      resultPage("📬", "Already Subscribed", "You're already subscribed! Daily picks are on their way."),
+      resultPage("info", "Already Subscribed", "You're already subscribed! Daily picks are on their way."),
       { headers: { "Content-Type": "text/html" } }
     );
   }
@@ -253,7 +300,7 @@ async function handleConfirm(request, env) {
 
   return new Response(
     resultPage(
-      "✅",
+      "success",
       "You're Subscribed!",
       "You'll start receiving daily West Campus dining recommendations. Welcome aboard!"
     ),
@@ -268,7 +315,7 @@ async function handleUnsubscribe(request, env) {
 
   if (!email || !token) {
     return new Response(
-      resultPage("⚠️", "Invalid Link", "This unsubscribe link is invalid.", true),
+      resultPage("error", "Invalid Link", "This unsubscribe link is invalid."),
       { status: 400, headers: { "Content-Type": "text/html" } }
     );
   }
@@ -276,7 +323,7 @@ async function handleUnsubscribe(request, env) {
   const valid = await hmacVerify(env.HMAC_SECRET, email, token);
   if (!valid) {
     return new Response(
-      resultPage("🚫", "Invalid Token", "This unsubscribe link is invalid or has been tampered with.", true),
+      resultPage("error", "Invalid Token", "This unsubscribe link is invalid or has been tampered with."),
       { status: 403, headers: { "Content-Type": "text/html" } }
     );
   }
@@ -286,7 +333,7 @@ async function handleUnsubscribe(request, env) {
 
   return new Response(
     resultPage(
-      "👋",
+      "success",
       "Unsubscribed",
       "You've been removed from the daily dining picks. You can re-subscribe anytime!"
     ),
@@ -366,7 +413,7 @@ export default {
     } catch (err) {
       console.error("Worker error:", err);
       return new Response(
-        resultPage("💥", "Error", "Something went wrong. Please try again.", true),
+        resultPage("error", "Error", "Something went wrong. Please try again."),
         { status: 500, headers: { "Content-Type": "text/html" } }
       );
     }
