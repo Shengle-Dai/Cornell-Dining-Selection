@@ -276,7 +276,10 @@ def fetch_subscribers_from_kv() -> List[str]:
 
     req = urllib.request.Request(
         f"{worker_url}/api/subscribers",
-        headers={"Authorization": f"Bearer {hmac_secret}"},
+        headers={
+            "Authorization": f"Bearer {hmac_secret}",
+            "User-Agent": "CampusMealPick-Daily/1.0",
+        },
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
