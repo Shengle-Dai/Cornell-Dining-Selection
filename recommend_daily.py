@@ -65,7 +65,20 @@ async def scrape_menus(local_dt: datetime) -> Dict[str, List[MenuSlice]]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
-        await page.goto("https://now.dining.cornell.edu/eateries", wait_until="networkidle")
+        # Retry navigation up to 3 times for transient network errors
+        for attempt in range(3):
+            try:
+                await page.goto(
+                    "https://now.dining.cornell.edu/eateries",
+                    wait_until="networkidle",
+                )
+                break
+            except Exception as e:
+                if attempt < 2:
+                    print(f"WARNING: page.goto attempt {attempt+1} failed: {e}, retrying...", file=sys.stderr)
+                    await asyncio.sleep(3)
+                else:
+                    raise
 
         # Wait for cards to appear
         await page.wait_for_selector("app-card", timeout=15000)
