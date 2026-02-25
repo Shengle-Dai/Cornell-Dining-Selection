@@ -4,7 +4,7 @@ Constraints:
 
 - Only consider eateries in campus_area == "West".
 - Provide recommendations for Breakfast/Brunch, Lunch, and Dinner for today.
-- For each meal, pick the **top 3** choices (first, second, and third pick).
+- For each meal, pick the **top 4** choices (first, second, third, and forth pick). Rank the top choices from best taste profile fit to least. 
 
 User profile:
 
