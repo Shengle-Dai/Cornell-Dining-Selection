@@ -273,41 +273,16 @@ def generate_unsub_token(email: str, secret: str) -> str:
     return hmac.new(secret.encode(), email.lower().encode(), hashlib.sha256).hexdigest()
 
 
-def fetch_subscribers_from_kv() -> List[str]:
-    """Fetch confirmed subscriber emails from Cloudflare Workers KV.
-
-    Requires WORKER_BASE_URL and HMAC_SECRET env vars.
-    Returns empty list if not configured (falls back to TO_EMAIL).
-    """
-    worker_url = os.environ.get("WORKER_BASE_URL", "").strip().rstrip("/")
-    hmac_secret = os.environ.get("HMAC_SECRET", "").strip()
-
-    if not worker_url or not hmac_secret:
-        return []
-
-    import urllib.request
-
-    req = urllib.request.Request(
-        f"{worker_url}/api/subscribers",
-        headers={
-            "Authorization": f"Bearer {hmac_secret}",
-            "User-Agent": "CampusMealPick-Daily/1.0",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-            return data.get("subscribers", [])
-    except Exception as e:
-        print(f"WARNING: failed to fetch subscribers from KV: {e}", file=sys.stderr)
-        return []
-
-
 def build_email(
     local_dt: datetime,
     result: Dict[str, Any],
     menus: Dict[str, List[MenuSlice]],
     unsubscribe_url: str = "",
+    rating_base_url: str = "",
+    recipient_email: str = "",
+    recipient_token: str = "",
+    daily_menu_lookup: Dict[int, Dict] = None,
+    date_str_iso: str = "",
 ) -> Tuple[str, str]:
     date_str = local_dt.strftime("%a, %b %d, %Y")
     subject = f"CMP — West Campus Dining Picks — {date_str}"
@@ -318,13 +293,41 @@ def build_email(
         for ms in lst:
             loc[ms.eatery_name] = ms.location
 
+    # Build reverse lookup: (normalized_name, eatery, bucket) -> daily_menus.id
+    menu_id_lookup: Dict[str, int] = {}
+    if daily_menu_lookup:
+        for menu_id, info in daily_menu_lookup.items():
+            key = f"{info.get('normalized', '')}|{info.get('eatery', '')}|{info.get('bucket', '')}"
+            menu_id_lookup[key] = menu_id
+
     meal_labels = [
         ("Breakfast / Brunch", "breakfast_brunch"),
         ("Lunch", "lunch"),
         ("Dinner", "dinner"),
     ]
 
-    def _pick_html(rank: int, pick: Dict[str, Any]) -> str:
+    def _rating_links(dish_name: str, eatery: str, bucket: str) -> str:
+        if not rating_base_url or not recipient_email or not recipient_token or not daily_menu_lookup:
+            return ""
+        from food_embeddings import normalize_dish_name
+        norm = normalize_dish_name(dish_name)
+        key = f"{norm}|{eatery}|{bucket}"
+        menu_id = menu_id_lookup.get(key)
+        if not menu_id:
+            return ""
+        base = (
+            f"{rating_base_url}/api/rate"
+            f"?email={quote(recipient_email)}&token={recipient_token}"
+            f"&menu_id={menu_id}&date={date_str_iso}"
+        )
+        return (
+            f' <a href="{escape(base + "&rating=up")}" '
+            f'style="text-decoration:none;font-size:14px;" title="I like this">&#128077;</a>'
+            f' <a href="{escape(base + "&rating=down")}" '
+            f'style="text-decoration:none;font-size:14px;" title="Not for me">&#128078;</a>'
+        )
+
+    def _pick_html(rank: int, pick: Dict[str, Any], bucket: str) -> str:
         raw_name = pick.get("eatery", "")
         name = escape(raw_name)
         dishes = pick.get("dishes", [])
@@ -336,7 +339,10 @@ def build_email(
         loc_line = f'<div style="color:#888;font-size:13px;">{location}</div>' if location else ""
         dishes_line = ""
         if dishes:
-            items_html = "".join(f"<li>{escape(d)}</li>" for d in dishes)
+            items_html = "".join(
+                f"<li>{escape(d)}{_rating_links(d, raw_name, bucket)}</li>"
+                for d in dishes
+            )
             dishes_line = f'<ul style="color:#555;font-size:13px;margin:4px 0 0 0;padding-left:20px;">{items_html}</ul>'
         return (
             f'<div style="margin-bottom:10px;">'
@@ -357,7 +363,7 @@ def build_email(
             inner = '<p style="color:#999;">No recommendation (no matching menu found).</p>'
         else:
             for i, p in enumerate(picks[:3]):
-                inner += _pick_html(i, p)
+                inner += _pick_html(i, p, key)
         sections_html += (
             f'<div style="margin-bottom:24px;">'
             f'<h2 style="margin:0 0 8px 0;font-size:18px;color:#2c3e50;'
@@ -375,6 +381,10 @@ def build_email(
             f'Unsubscribe from daily picks</a></p>'
         )
 
+    rating_hint = ""
+    if rating_base_url:
+        rating_hint = '<p style="font-size:11px;color:#aaa;">Rate dishes with &#128077;&#128078; to improve your recommendations.</p>'
+
     html = (
         f'<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
         f'max-width:520px;margin:0 auto;padding:16px;">'
@@ -385,22 +395,142 @@ def build_email(
         f'{sections_html}'
         f'<hr style="border:none;border-top:1px solid #eee;margin:20px 0 12px 0;">'
         f'<p style="font-size:11px;color:#aaa;">Data: now.dining.cornell.edu</p>'
+        f'{rating_hint}'
         f'{unsub_line}'
         f'</div>'
     )
     return subject, html
 
 
-def send_emails(
-    subject: str,
-    result: Dict[str, Any],
-    menus: Dict[str, List[MenuSlice]],
-    local_dt: datetime,
-) -> None:
-    """Send individual emails with personalized unsubscribe links.
+async def main() -> int:
+    local_dt = datetime.now(LOCAL_TZ)
+    date_str_iso = local_dt.strftime("%Y-%m-%d")
 
-    Tries Cloudflare KV subscribers first; falls back to TO_EMAIL env var.
-    """
+    # Step 1: Scrape menus (unchanged)
+    menus = await scrape_menus(local_dt)
+
+    # Step 2: Load food2vec model and Supabase client
+    from food_embeddings import FoodVectorModel, normalize_dish_name
+    from ingredient_extractor import extract_ingredients_batch
+    from recommendation_engine import compute_preference_vector, generate_recommendations
+    from supabase_client import SupabaseClient
+
+    model = FoodVectorModel()
+    db = SupabaseClient()
+    print(f"food2vec loaded: {model.vocab_size} items in vocabulary.")
+
+    # Step 3: Collect all dish names, check Supabase cache
+    all_dishes: List[Tuple[str, str, str, str]] = []  # (normalized, original, eatery, bucket)
+    for bucket, slices in menus.items():
+        for ms in slices:
+            for item in ms.items:
+                all_dishes.append((normalize_dish_name(item), item, ms.eatery_name, bucket))
+
+    unique_names = list(set(d[0] for d in all_dishes))
+    print(f"Total unique dishes: {len(unique_names)}")
+
+    cached = db.get_dishes_batch(unique_names)
+
+    # Step 4: Extract ingredients for uncached dishes via LLM
+    uncached = [n for n in unique_names if not cached.get(n)]
+    if uncached:
+        print(f"Extracting ingredients for {len(uncached)} new dishes via LLM...")
+        # Build normalized -> original name mapping
+        name_map: Dict[str, str] = {}
+        for norm, orig, _, _ in all_dishes:
+            if norm not in name_map:
+                name_map[norm] = orig
+
+        originals = [name_map.get(n, n) for n in uncached]
+        ingredients_map = extract_ingredients_batch(originals)
+
+        # Compute embeddings and store in Supabase
+        new_dishes: Dict[str, Dict] = {}
+        for norm_name in uncached:
+            orig = name_map.get(norm_name, norm_name)
+            ings = ingredients_map.get(orig, [])
+            vec = model.embed_ingredients(ings)
+            new_dishes[norm_name] = {
+                "ingredients": ings,
+                "embedding": vec.tolist() if vec is not None else None,
+                "source_name": orig,
+            }
+        db.upsert_dishes_batch(new_dishes)
+        # Re-fetch to get IDs assigned by the database
+        cached = db.get_dishes_batch(unique_names)
+        print(f"  Cached {len(new_dishes)} new dishes.")
+    else:
+        print("All dishes already cached.")
+
+    # Step 5: Store daily menu mapping (for rating links)
+    # Build dish_id map from cached data
+    menu_entries: List[Dict[str, Any]] = []
+    seen_combos: set = set()
+    for norm_name, orig_name, eatery, bucket in all_dishes:
+        dish_data = cached.get(norm_name)
+        if not dish_data or "id" not in dish_data:
+            continue
+        combo_key = (norm_name, eatery, bucket)
+        if combo_key in seen_combos:
+            continue
+        seen_combos.add(combo_key)
+        menu_entries.append({
+            "dish_id": dish_data["id"],
+            "eatery": eatery,
+            "bucket": bucket,
+        })
+    db.upsert_daily_menu(date_str_iso, menu_entries)
+
+    # Fetch daily menu lookup for rating links
+    daily_menu_lookup = db.get_daily_menu_lookup(date_str_iso)
+
+    # Step 6: Fetch subscribers and preferences
+    users = db.get_subscribed_users()
+    if not users:
+        # Fallback to TO_EMAIL for bootstrapping
+        to_emails = [
+            e.strip()
+            for e in os.environ.get("TO_EMAIL", "").split(",")
+            if e.strip()
+        ]
+        if not to_emails:
+            raise RuntimeError("No subscribers found (Supabase empty and TO_EMAIL not set)")
+        print(f"No Supabase subscribers; falling back to TO_EMAIL ({len(to_emails)} recipient(s)).")
+        # Convert to user-like dicts for uniform handling
+        users = [
+            {"id": None, "email": e, "initial_ingredients": [],
+             "preference_vector": None, "vector_stale": False}
+            for e in to_emails
+        ]
+    else:
+        print(f"Sending to {len(users)} subscriber(s).")
+
+    # Recompute stale preference vectors
+    for user in users:
+        if user.get("vector_stale") and user.get("id"):
+            print(f"  Recomputing preference vector for {user['email']}...")
+            ratings = db.get_user_ratings(user["id"])
+
+            liked = [
+                {"name": r["dish_normalized_name"], "embedding": r["embedding"]}
+                for r in ratings if r["rating"] == 1
+            ]
+            disliked = [
+                {"name": r["dish_normalized_name"], "embedding": r["embedding"]}
+                for r in ratings if r["rating"] == -1
+            ]
+
+            new_vec = compute_preference_vector(
+                user.get("initial_ingredients", []),
+                liked,
+                disliked,
+                cached,
+                model,
+            )
+            user["preference_vector"] = new_vec
+            db.update_preference_vector(user["id"], new_vec)
+
+    # Step 7: Generate per-user recommendations and send emails
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
     gmail_app_password = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
     hmac_secret = os.environ.get("HMAC_SECRET", "").strip()
@@ -409,36 +539,72 @@ def send_emails(
     if not gmail_user or not gmail_app_password:
         raise RuntimeError("Missing env vars: GMAIL_USER, GMAIL_APP_PASSWORD")
 
-    # Try KV subscribers first, fall back to TO_EMAIL
-    kv_subscribers = fetch_subscribers_from_kv()
-    if kv_subscribers:
-        to_emails = kv_subscribers
-        print(f"Sending to {len(to_emails)} KV subscriber(s).")
-    else:
-        to_emails = [
-            e.strip()
-            for e in os.environ.get("TO_EMAIL", "").split(",")
-            if e.strip()
-        ]
-        print(f"KV not configured; falling back to TO_EMAIL ({len(to_emails)} recipient(s)).")
-
-    if not to_emails:
-        raise RuntimeError("No subscribers found (KV empty and TO_EMAIL not set)")
+    # LLM fallback: precompute once for users without preferences
+    llm_result = None
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
         smtp.login(gmail_user, gmail_app_password)
 
-        for recipient in to_emails:
-            # Build personalized unsubscribe URL
+        for user in users:
+            recipient = user["email"]
+            token = generate_unsub_token(recipient, hmac_secret) if hmac_secret else ""
+
+            # Build unsubscribe URL
             unsub_url = ""
             if hmac_secret and worker_url:
-                token = generate_unsub_token(recipient, hmac_secret)
                 unsub_url = (
                     f"{worker_url}/api/unsubscribe"
                     f"?email={quote(recipient)}&token={token}"
                 )
 
-            _, body = build_email(local_dt, result, menus, unsub_url)
+            # Check if user has preference vector
+            pref_vector = user.get("preference_vector")
+
+            if pref_vector:
+                # Embedding-based recommendation
+                result = generate_recommendations(pref_vector, menus, cached)
+                print(f"  {recipient}: embedding-based recommendation")
+            else:
+                # LLM fallback (computed once, shared for all no-pref users)
+                if llm_result is None:
+                    print("  Computing LLM fallback recommendation...")
+                    prompt = load_prompt()
+                    payload = {
+                        "date_local": date_str_iso,
+                        "timezone": "America/New_York",
+                        "campus_area_filter": "West",
+                        "meals": {
+                            k: [
+                                {
+                                    "eatery_name": ms.eatery_name,
+                                    "location": ms.location,
+                                    "event_descriptions": ms.event_descriptions,
+                                    "menu_summary": ms.menu_summary,
+                                    "categories": ms.categories,
+                                    "items": ms.items,
+                                }
+                                for ms in v
+                            ]
+                            for k, v in menus.items()
+                        },
+                    }
+                    llm_result = call_llm(prompt, payload)
+                    llm_result = sanitize_result(llm_result, menus)
+                result = llm_result
+                print(f"  {recipient}: LLM fallback recommendation")
+
+            # Build and send personalized email
+            subject, body = build_email(
+                local_dt,
+                result,
+                menus,
+                unsubscribe_url=unsub_url,
+                rating_base_url=worker_url,
+                recipient_email=recipient,
+                recipient_token=token,
+                daily_menu_lookup=daily_menu_lookup,
+                date_str_iso=date_str_iso,
+            )
 
             msg = EmailMessage()
             msg["Subject"] = subject
@@ -450,37 +616,6 @@ def send_emails(
             smtp.send_message(msg)
             print(f"  → Sent to {recipient}")
 
-
-async def main() -> int:
-    local_dt = datetime.now(LOCAL_TZ)
-
-    prompt = load_prompt()
-    menus = await scrape_menus(local_dt)
-
-    payload = {
-        "date_local": local_dt.strftime("%Y-%m-%d"),
-        "timezone": "America/New_York",
-        "campus_area_filter": "West",
-        "meals": {
-            k: [
-                {
-                    "eatery_name": ms.eatery_name,
-                    "location": ms.location,
-                    "event_descriptions": ms.event_descriptions,
-                    "menu_summary": ms.menu_summary,
-                    "categories": ms.categories,
-                    "items": ms.items,
-                }
-                for ms in v
-            ]
-            for k, v in menus.items()
-        },
-    }
-
-    result = call_llm(prompt, payload)
-    result = sanitize_result(result, menus)
-    subject, _ = build_email(local_dt, result, menus)
-    send_emails(subject, result, menus, local_dt)
     print("All emails sent.")
     return 0
 

@@ -1,16 +1,36 @@
 /**
- * Campus Meal Pick (CMP) Subscribe/Unsubscribe Worker
+ * Campus Meal Pick (CMP) — Cloudflare Worker
  *
  * Endpoints:
- *   GET  /                     — Subscribe form
- *   POST /api/subscribe        — Start subscribe flow (triggers verification email)
- *   GET  /api/confirm          — Confirm subscription (verifies HMAC token)
- *   GET  /api/unsubscribe      — Remove subscription (verifies HMAC token)
- *   GET  /api/subscribers      — List confirmed subscribers (internal, requires auth)
+ *   GET  /                — Landing page with "Sign in with Google" button
+ *   GET  /auth/callback   — Supabase OAuth callback handler
+ *   GET  /onboarding      — Preference selection page (JWT-authed)
+ *   POST /api/preferences — Set initial preferences (JWT-authed)
+ *   GET  /api/unsubscribe — Remove subscription (HMAC-verified email link)
+ *   GET  /api/rate        — Rate a dish (HMAC-verified email link)
  *
- * KV keys: "sub:<email>" → JSON { subscribedAt }
- * Secrets: HMAC_SECRET, GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO
+ * Env vars: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, HMAC_SECRET
  */
+
+import { createClient } from "@supabase/supabase-js";
+
+// ─── Supabase helpers ───────────────────────────────────────────────────────
+
+function createSupabaseClient(env, authHeader = null) {
+  const opts = {
+    auth: { autoRefreshToken: false, persistSession: false },
+  };
+  if (authHeader) {
+    opts.global = { headers: { Authorization: authHeader } };
+  }
+  return createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, opts);
+}
+
+function createServiceClient(env) {
+  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
 
 // ─── Crypto helpers ─────────────────────────────────────────────────────────
 
@@ -31,7 +51,6 @@ async function hmacSign(secret, data) {
 
 async function hmacVerify(secret, data, token) {
   const expected = await hmacSign(secret, data);
-  // Constant-time comparison
   if (expected.length !== token.length) return false;
   let diff = 0;
   for (let i = 0; i < expected.length; i++) {
@@ -69,7 +88,7 @@ function pageShell(title, content) {
       text-align: center;
     }
     h1 {
-      font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif; /* Cornell-esque serif */
+      font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
       color: var(--cornell-red);
       font-size: 24px;
       font-weight: 600;
@@ -82,31 +101,11 @@ function pageShell(title, content) {
       line-height: 1.5;
       margin: 0 0 32px;
     }
-    form {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    input {
-      width: 100%;
-      padding: 12px 0;
-      border: none;
-      border-bottom: 2px solid #eee;
-      font-size: 16px;
-      outline: none;
-      border-radius: 0;
-      background: transparent;
-      text-align: center;
-      transition: border-color 0.2s;
-      color: var(--text);
-    }
-    input:focus {
-      border-bottom-color: var(--cornell-red);
-    }
-    input::placeholder {
-      color: #aaa;
-    }
-    button {
+    button, .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
       width: 100%;
       padding: 14px;
       margin-top: 10px;
@@ -120,8 +119,9 @@ function pageShell(title, content) {
       letter-spacing: 0.05em;
       cursor: pointer;
       transition: all 0.2s;
+      text-decoration: none;
     }
-    button:hover {
+    button:hover, .btn:hover {
       background: var(--cornell-red);
       color: white;
     }
@@ -142,6 +142,11 @@ function pageShell(title, content) {
     }
     a { color: var(--cornell-red); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .edu-note {
+      font-size: 12px;
+      color: #999;
+      margin-top: 12px;
+    }
 
     .how-it-works {
       margin-top: 60px;
@@ -165,7 +170,7 @@ function pageShell(title, content) {
     .step:nth-child(1) { animation-delay: 0.2s; }
     .step:nth-child(2) { animation-delay: 0.4s; }
     .step:nth-child(3) { animation-delay: 0.6s; }
-    
+
     .step-icon {
       width: 56px;
       height: 56px;
@@ -202,7 +207,7 @@ function pageShell(title, content) {
       margin: 0;
       max-width: 160px;
     }
-    
+
     /* Email Sample Preview */
     .email-preview {
       margin-top: 60px;
@@ -281,7 +286,7 @@ function pageShell(title, content) {
       left: 0;
       color: #ddd;
     }
-    
+
     @keyframes fadeUp {
       from { opacity: 0; transform: translateY(20px); }
       to { opacity: 1; transform: translateY(0); }
@@ -295,24 +300,30 @@ function pageShell(title, content) {
 }
 
 const icons = {
-  // Minimalist icons
   email: `<div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg></div>`,
   success: `<div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 13l4 4L19 7" /></svg></div>`,
   error: `<div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12" /></svg></div>`,
-  info: `<div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>`
+  info: `<div class="icon"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>`,
 };
 
-function subscribePage() {
+// Google logo SVG for the sign-in button
+const googleLogo = `<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 01-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/><path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 6.29C4.672 4.163 6.656 2.58 9 3.58z" fill="#EA4335"/></svg>`;
+
+function landingPage(env) {
+  const supabaseUrl = env.SUPABASE_URL;
+  const workerOrigin = env.WORKER_ORIGIN || "";
+
   return pageShell(
     "Campus Meal Pick",
     `
     <h1>Daily Dining Picks</h1>
-    <p>Curated recommendations for West Campus.</p>
-    <form method="POST" action="/api/subscribe">
-      <input type="email" name="email" placeholder="netid@cornell.edu" required aria-label="Email address" autocomplete="email">
-      <button type="submit">Subscribe</button>
-    </form>
-    <div class="footer">Verification email will be sent.</div>
+    <p>Personalized recommendations for West Campus, powered by food2vec.</p>
+    <a href="#" id="google-signin" class="btn">
+      ${googleLogo}
+      Sign in with Google
+    </a>
+    <p class="edu-note">Requires a .edu email address.</p>
+    <div class="footer">No spam, just food.</div>
 
     <div class="how-it-works">
       <div class="step">
@@ -324,7 +335,7 @@ function subscribePage() {
         <h3>Menu Scrape</h3>
         <p>Daily menus from West Campus dining halls.</p>
       </div>
-      
+
       <div class="step">
         <div class="step-icon">
           <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -332,7 +343,7 @@ function subscribePage() {
           </svg>
         </div>
         <h3>AI Curates</h3>
-        <p>Top 3 picks based on variety &amp; nutrition.</p>
+        <p>Personalized picks via food2vec embeddings.</p>
       </div>
 
       <div class="step">
@@ -342,7 +353,7 @@ function subscribePage() {
           </svg>
         </div>
         <h3>You Eat</h3>
-        <p>A clean daily email. No spam, just food.</p>
+        <p>A clean daily email. Rate dishes to improve picks.</p>
       </div>
     </div>
 
@@ -353,10 +364,10 @@ function subscribePage() {
           <span>Fri, Feb 13</span>
           <span>Sample Email</span>
         </div>
-        
+
         <div class="meal-section">
           <h2 class="meal-title">Lunch</h2>
-          
+
           <div class="pick-item">
             <div class="pick-header">
               <span class="pick-rank">#1</span>
@@ -381,6 +392,17 @@ function subscribePage() {
         </div>
       </div>
     </div>
+
+    <script>
+      document.getElementById('google-signin').addEventListener('click', async (e) => {
+        e.preventDefault();
+        const supabaseUrl = ${JSON.stringify(supabaseUrl)};
+        const redirectTo = ${JSON.stringify(workerOrigin)}.replace(/\\/$/, '') + '/auth/callback';
+        // Redirect to Supabase OAuth endpoint
+        const url = supabaseUrl + '/auth/v1/authorize?provider=google&redirect_to=' + encodeURIComponent(redirectTo);
+        window.location.href = url;
+      });
+    </script>
     `
   );
 }
@@ -399,123 +421,201 @@ function resultPage(type, title, message) {
 
 // ─── Handlers ───────────────────────────────────────────────────────────────
 
-async function handleSubscribe(request, env) {
-  const contentType = request.headers.get("content-type") || "";
-  let email = "";
-
-  if (contentType.includes("application/x-www-form-urlencoded")) {
-    const form = await request.formData();
-    email = (form.get("email") || "").toString().trim().toLowerCase();
-  } else if (contentType.includes("application/json")) {
-    const body = await request.json();
-    email = (body.email || "").toString().trim().toLowerCase();
-  }
-
-  // Basic validation
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return new Response(
-      resultPage("error", "Invalid Email", "Please enter a valid email address."),
-      { status: 400, headers: { "Content-Type": "text/html" } }
-    );
-  }
-
-  // Check if already subscribed
-  const existing = await env.SUBSCRIBERS.get(`sub:${email}`);
-  if (existing) {
-    return new Response(
-      resultPage("info", "Already Subscribed", "This email is already receiving daily dining picks!"),
-      { headers: { "Content-Type": "text/html" } }
-    );
-  }
-
-  // Generate HMAC token
-  const token = await hmacSign(env.HMAC_SECRET, email);
-  const workerUrl = new URL(request.url).origin;
-  const confirmUrl = `${workerUrl}/api/confirm?email=${encodeURIComponent(email)}&token=${token}`;
-
-  // Trigger GitHub Actions to send verification email
-  const dispatchRes = await fetch(
-    `https://api.github.com/repos/${env.GH_OWNER}/${env.GH_REPO}/dispatches`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.GH_PAT_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "campus-meal-pick-worker",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        event_type: "send_verification",
-        client_payload: {
-          email: email,
-          confirm_url: confirmUrl,
-        },
-      }),
-    }
-  );
-
-  if (!dispatchRes.ok) {
-    const errText = await dispatchRes.text();
-    console.error("GitHub dispatch failed:", dispatchRes.status, errText);
-    return new Response(
-      resultPage("error", "Something Went Wrong", "Failed to send verification email. Please try again later."),
-      { status: 500, headers: { "Content-Type": "text/html" } }
-    );
-  }
-
+async function handleAuthCallback(request, env) {
+  // Supabase redirects with a hash fragment containing the access token.
+  // Since fragments aren't sent to the server, we need a client-side page
+  // to extract the token and redirect appropriately.
   return new Response(
-    resultPage(
-      "email",
-      "Check Your Inbox",
-      `We've sent a confirmation email to <strong>${email}</strong>. Click the link inside to activate your subscription. (It may take up to a minute to arrive.)`
+    pageShell(
+      "Signing in...",
+      `
+      ${icons.info}
+      <h1>Signing in...</h1>
+      <p>Please wait while we complete your sign-in.</p>
+      <script>
+        (async () => {
+          // Extract tokens from URL hash
+          const hash = window.location.hash.substring(1);
+          const params = new URLSearchParams(hash);
+          const accessToken = params.get('access_token');
+          const refreshToken = params.get('refresh_token');
+          const error = params.get('error_description') || params.get('error');
+
+          if (error) {
+            document.querySelector('.container').innerHTML =
+              '${icons.error}<h1>Sign-in Failed</h1><p>' + error + '</p>';
+            return;
+          }
+
+          if (!accessToken) {
+            document.querySelector('.container').innerHTML =
+              '${icons.error}<h1>Sign-in Failed</h1><p>No access token received.</p>';
+            return;
+          }
+
+          // Store tokens in sessionStorage for the onboarding page
+          sessionStorage.setItem('sb_access_token', accessToken);
+          if (refreshToken) sessionStorage.setItem('sb_refresh_token', refreshToken);
+
+          // Check if user already has preferences
+          try {
+            const supabaseUrl = ${JSON.stringify(env.SUPABASE_URL)};
+            const resp = await fetch(supabaseUrl + '/rest/v1/user_preferences?select=user_id', {
+              headers: {
+                'Authorization': 'Bearer ' + accessToken,
+                'apikey': ${JSON.stringify(env.SUPABASE_ANON_KEY)},
+              }
+            });
+            const prefs = await resp.json();
+            if (prefs && prefs.length > 0) {
+              // Already onboarded
+              document.querySelector('.container').innerHTML =
+                '${icons.success}<h1>Welcome Back!</h1><p>You are already subscribed. Daily picks are on their way!</p>';
+              return;
+            }
+          } catch (e) {
+            // If check fails, just redirect to onboarding
+          }
+
+          // Redirect to onboarding
+          window.location.href = '/onboarding';
+        })();
+      </script>
+      `
     ),
     { headers: { "Content-Type": "text/html" } }
   );
 }
 
-async function handleConfirm(request, env) {
-  const url = new URL(request.url);
-  const email = (url.searchParams.get("email") || "").trim().toLowerCase();
-  const token = url.searchParams.get("token") || "";
+async function handleOnboarding(_request, _env) {
+  const categories = [
+    "Chinese", "Japanese", "Korean", "Indian", "Mexican",
+    "Italian", "American", "Mediterranean", "Thai", "Vietnamese",
+  ];
+  const ingredients = [
+    "chicken", "beef", "pork", "tofu", "rice",
+    "noodles", "seafood", "eggs", "cheese", "vegetables",
+  ];
 
-  if (!email || !token) {
-    return new Response(
-      resultPage("error", "Invalid Link", "This confirmation link is invalid."),
-      { status: 400, headers: { "Content-Type": "text/html" } }
-    );
-  }
+  const catCheckboxes = categories
+    .map(
+      (c) =>
+        `<label class="chip"><input type="checkbox" name="categories" value="${c.toLowerCase()}"> ${c}</label>`
+    )
+    .join("\n");
 
-  const valid = await hmacVerify(env.HMAC_SECRET, email, token);
-  if (!valid) {
-    return new Response(
-      resultPage("error", "Invalid Token", "This confirmation link is invalid or has been tampered with."),
-      { status: 403, headers: { "Content-Type": "text/html" } }
-    );
-  }
-
-  // Check if already subscribed
-  const existing = await env.SUBSCRIBERS.get(`sub:${email}`);
-  if (existing) {
-    return new Response(
-      resultPage("info", "Already Subscribed", "You're already subscribed! Daily picks are on their way."),
-      { headers: { "Content-Type": "text/html" } }
-    );
-  }
-
-  // Add to KV
-  await env.SUBSCRIBERS.put(
-    `sub:${email}`,
-    JSON.stringify({ subscribedAt: new Date().toISOString() })
-  );
+  const ingCheckboxes = ingredients
+    .map(
+      (i) =>
+        `<label class="chip"><input type="checkbox" name="ingredients" value="${i}"> ${i}</label>`
+    )
+    .join("\n");
 
   return new Response(
-    resultPage(
-      "success",
-      "You're Subscribed!",
-      "You'll start receiving daily West Campus dining recommendations. Welcome aboard!"
+    pageShell(
+      "Set Your Preferences",
+      `
+      ${icons.success}
+      <h1>You're Subscribed!</h1>
+      <p>Tell us what you like so we can personalize your picks.</p>
+      <form id="pref-form" style="text-align:left;">
+        <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Cuisines you enjoy</h3>
+        <div class="chips">${catCheckboxes}</div>
+        <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Ingredients you like</h3>
+        <div class="chips">${ingCheckboxes}</div>
+        <button type="submit" style="margin-top:20px;">Save Preferences</button>
+      </form>
+      <a href="/" class="footer" style="display:block;margin-top:16px;">Skip for now</a>
+      <style>
+        .chips { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; }
+        .chip {
+          display:inline-flex; align-items:center; gap:4px;
+          padding:6px 12px; border:1px solid #ddd; border-radius:20px;
+          font-size:13px; cursor:pointer; transition:all 0.2s;
+        }
+        .chip:has(input:checked) {
+          background:var(--cornell-red); color:white; border-color:var(--cornell-red);
+        }
+        .chip input { display:none; }
+      </style>
+      <script>
+        document.getElementById('pref-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const cats = [...document.querySelectorAll('input[name="categories"]:checked')].map(i => i.value);
+          const ings = [...document.querySelectorAll('input[name="ingredients"]:checked')].map(i => i.value);
+          const accessToken = sessionStorage.getItem('sb_access_token');
+          if (!accessToken) {
+            alert('Session expired. Please sign in again.');
+            window.location.href = '/';
+            return;
+          }
+          try {
+            const res = await fetch('/api/preferences', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + accessToken,
+              },
+              body: JSON.stringify({ categories: cats, ingredients: ings })
+            });
+            if (res.ok) {
+              document.querySelector('.container').innerHTML =
+                '${icons.success}<h1>Preferences Saved!</h1><p>Your daily picks will be personalized starting tomorrow.</p>';
+            } else {
+              const data = await res.json().catch(() => ({}));
+              alert(data.error || 'Failed to save. Please try again.');
+            }
+          } catch (err) {
+            alert('Failed to save. Please try again.');
+          }
+        });
+      </script>
+      `
     ),
     { headers: { "Content-Type": "text/html" } }
   );
+}
+
+async function handleSetPreferences(request, env) {
+  // JWT-authenticated: extract user from Supabase token
+  const authHeader = request.headers.get("Authorization") || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return Response.json({ error: "Missing auth token" }, { status: 401 });
+  }
+
+  const supabase = createSupabaseClient(env, authHeader);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return Response.json({ error: "Invalid or expired token" }, { status: 401 });
+  }
+
+  const body = await request.json();
+  const categories = body.categories || [];
+  const ingredients = body.ingredients || [];
+
+  // Upsert user_preferences using service role (to bypass RLS for upsert)
+  const service = createServiceClient(env);
+  const { error } = await service.from("user_preferences").upsert(
+    {
+      user_id: user.id,
+      initial_categories: categories,
+      initial_ingredients: ingredients,
+      vector_stale: true,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" }
+  );
+
+  if (error) {
+    console.error("Preferences upsert error:", error);
+    return Response.json({ error: "Failed to save preferences" }, { status: 500 });
+  }
+
+  return Response.json({ ok: true });
 }
 
 async function handleUnsubscribe(request, env) {
@@ -533,49 +633,150 @@ async function handleUnsubscribe(request, env) {
   const valid = await hmacVerify(env.HMAC_SECRET, email, token);
   if (!valid) {
     return new Response(
-      resultPage("error", "Invalid Token", "This unsubscribe link is invalid or has been tampered with."),
+      resultPage(
+        "error",
+        "Invalid Token",
+        "This unsubscribe link is invalid or has been tampered with."
+      ),
       { status: 403, headers: { "Content-Type": "text/html" } }
     );
   }
 
-  // Remove from KV
-  await env.SUBSCRIBERS.delete(`sub:${email}`);
+  // Update profiles.subscribed = false via service role
+  const service = createServiceClient(env);
+  const { error } = await service
+    .from("profiles")
+    .update({ subscribed: false, updated_at: new Date().toISOString() })
+    .eq("email", email);
+
+  if (error) {
+    console.error("Unsubscribe error:", error);
+    return new Response(
+      resultPage("error", "Error", "Something went wrong. Please try again."),
+      { status: 500, headers: { "Content-Type": "text/html" } }
+    );
+  }
 
   return new Response(
     resultPage(
       "success",
       "Unsubscribed",
-      "You've been removed from the daily dining picks. You can re-subscribe anytime!"
+      "You've been removed from the daily dining picks. You can re-subscribe anytime by signing in again!"
     ),
     { headers: { "Content-Type": "text/html" } }
   );
 }
 
-async function handleListSubscribers(request, env) {
-  // Protected endpoint — only callable from GitHub Actions with the correct token
-  const authHeader = request.headers.get("Authorization") || "";
-  const expected = `Bearer ${env.HMAC_SECRET}`;
-  if (authHeader !== expected) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+async function handleRate(request, env) {
+  const url = new URL(request.url);
+  const email = (url.searchParams.get("email") || "").trim().toLowerCase();
+  const token = url.searchParams.get("token") || "";
+  const menuId = url.searchParams.get("menu_id") || "";
+  const date = url.searchParams.get("date") || "";
+  const rating = url.searchParams.get("rating") || "";
+
+  if (
+    !email ||
+    !token ||
+    !menuId ||
+    !date ||
+    !["up", "down"].includes(rating)
+  ) {
+    return new Response(
+      resultPage("error", "Invalid Link", "This rating link is invalid."),
+      { status: 400, headers: { "Content-Type": "text/html" } }
+    );
   }
 
-  const subscribers = [];
-  let cursor = null;
+  const valid = await hmacVerify(env.HMAC_SECRET, email, token);
+  if (!valid) {
+    return new Response(
+      resultPage(
+        "error",
+        "Invalid Token",
+        "This rating link is invalid or has been tampered with."
+      ),
+      { status: 403, headers: { "Content-Type": "text/html" } }
+    );
+  }
 
-  do {
-    const result = await env.SUBSCRIBERS.list({
-      prefix: "sub:",
-      cursor: cursor,
-      limit: 1000,
-    });
-    for (const key of result.keys) {
-      // Key name is "sub:email@example.com"
-      subscribers.push(key.name.slice(4));
-    }
-    cursor = result.list_complete ? null : result.cursor;
-  } while (cursor);
+  const service = createServiceClient(env);
 
-  return Response.json({ subscribers });
+  // Look up user by email
+  const { data: profiles } = await service
+    .from("profiles")
+    .select("id")
+    .eq("email", email)
+    .limit(1);
+
+  if (!profiles || profiles.length === 0) {
+    return new Response(
+      resultPage("error", "User Not Found", "No account found for this email."),
+      { status: 404, headers: { "Content-Type": "text/html" } }
+    );
+  }
+  const userId = profiles[0].id;
+
+  // Look up the daily menu entry to get dish_id
+  const { data: menuEntry } = await service
+    .from("daily_menus")
+    .select("dish_id, dishes(source_name)")
+    .eq("id", menuId)
+    .limit(1);
+
+  if (!menuEntry || menuEntry.length === 0) {
+    return new Response(
+      resultPage(
+        "error",
+        "Dish Not Found",
+        "This dish is no longer available for rating."
+      ),
+      { status: 404, headers: { "Content-Type": "text/html" } }
+    );
+  }
+
+  const dishId = menuEntry[0].dish_id;
+  const dishName = menuEntry[0].dishes?.source_name || "this dish";
+  const ratingValue = rating === "up" ? 1 : -1;
+
+  // Upsert rating
+  const { error: ratingError } = await service.from("ratings").upsert(
+    {
+      user_id: userId,
+      dish_id: dishId,
+      rating: ratingValue,
+      menu_date: date,
+    },
+    { onConflict: "user_id,dish_id,menu_date" }
+  );
+
+  if (ratingError) {
+    console.error("Rating upsert error:", ratingError);
+    return new Response(
+      resultPage("error", "Error", "Failed to save your rating. Please try again."),
+      { status: 500, headers: { "Content-Type": "text/html" } }
+    );
+  }
+
+  // Mark preference vector as stale
+  await service.from("user_preferences").upsert(
+    {
+      user_id: userId,
+      vector_stale: true,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" }
+  );
+
+  const message =
+    rating === "up"
+      ? `Glad you liked <strong>${dishName}</strong>! We'll recommend more like it.`
+      : `Got it — we'll show less of <strong>${dishName}</strong> in the future.`;
+
+  return new Response(
+    resultPage("success", rating === "up" ? "Liked!" : "Noted!", message),
+    { headers: { "Content-Type": "text/html" } }
+  );
 }
 
 // ─── Router ─────────────────────────────────────────────────────────────────
@@ -598,25 +799,29 @@ export default {
 
     try {
       if (path === "/" && request.method === "GET") {
-        return new Response(subscribePage(), {
+        return new Response(landingPage(env), {
           headers: { "Content-Type": "text/html" },
         });
       }
 
-      if (path === "/api/subscribe" && request.method === "POST") {
-        return await handleSubscribe(request, env);
+      if (path === "/auth/callback" && request.method === "GET") {
+        return await handleAuthCallback(request, env);
       }
 
-      if (path === "/api/confirm" && request.method === "GET") {
-        return await handleConfirm(request, env);
+      if (path === "/onboarding" && request.method === "GET") {
+        return await handleOnboarding(request, env);
+      }
+
+      if (path === "/api/preferences" && request.method === "POST") {
+        return await handleSetPreferences(request, env);
       }
 
       if (path === "/api/unsubscribe" && request.method === "GET") {
         return await handleUnsubscribe(request, env);
       }
 
-      if (path === "/api/subscribers" && request.method === "GET") {
-        return await handleListSubscribers(request, env);
+      if (path === "/api/rate" && request.method === "GET") {
+        return await handleRate(request, env);
       }
 
       return new Response("Not Found", { status: 404 });
