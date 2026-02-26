@@ -411,7 +411,7 @@ async def main() -> int:
 
     # Step 2: Load food2vec model and Supabase client
     from food_embeddings import FoodVectorModel, normalize_dish_name
-    from ingredient_extractor import extract_ingredients_batch
+    from ingredient_extractor import extract_dish_attributes_batch
     from recommendation_engine import compute_preference_vector, generate_recommendations
     from supabase_client import SupabaseClient
 
@@ -431,36 +431,51 @@ async def main() -> int:
 
     cached = db.get_dishes_batch(unique_names)
 
-    # Step 4: Extract ingredients for uncached dishes via LLM
+    # Step 4: Extract attributes for uncached dishes + backfill cached dishes missing attributes
     uncached = [n for n in unique_names if not cached.get(n)]
-    if uncached:
-        print(f"Extracting ingredients for {len(uncached)} new dishes via LLM...")
+    needs_attrs = [n for n in unique_names if cached.get(n) and not cached[n].get("flavor_profiles")]
+    to_extract = list(set(uncached + needs_attrs))
+
+    if to_extract:
+        label_parts = []
+        if uncached:
+            label_parts.append(f"{len(uncached)} new")
+        if needs_attrs:
+            label_parts.append(f"{len(needs_attrs)} backfill")
+        print(f"Extracting attributes for {len(to_extract)} dishes ({', '.join(label_parts)}) via LLM...")
+
         # Build normalized -> original name mapping
         name_map: Dict[str, str] = {}
         for norm, orig, _, _ in all_dishes:
             if norm not in name_map:
                 name_map[norm] = orig
 
-        originals = [name_map.get(n, n) for n in uncached]
-        ingredients_map = extract_ingredients_batch(originals)
+        originals = [name_map.get(n, n) for n in to_extract]
+        attrs_map = extract_dish_attributes_batch(originals)
 
         # Compute embeddings and store in Supabase
         new_dishes: Dict[str, Dict] = {}
-        for norm_name in uncached:
+        for norm_name in to_extract:
             orig = name_map.get(norm_name, norm_name)
-            ings = ingredients_map.get(orig, [])
+            attrs = attrs_map.get(orig, {})
+            ings = attrs.get("ingredients", [])
             vec = model.embed_ingredients(ings)
             new_dishes[norm_name] = {
                 "ingredients": ings,
                 "embedding": vec.tolist() if vec is not None else None,
                 "source_name": orig,
+                "flavor_profiles": attrs.get("flavor_profiles", []),
+                "cooking_methods": attrs.get("cooking_methods", []),
+                "cuisine_type": attrs.get("cuisine_type", "other"),
+                "dietary_attrs": attrs.get("dietary_attrs", []),
+                "dish_type": attrs.get("dish_type", "main"),
             }
         db.upsert_dishes_batch(new_dishes)
         # Re-fetch to get IDs assigned by the database
         cached = db.get_dishes_batch(unique_names)
-        print(f"  Cached {len(new_dishes)} new dishes.")
+        print(f"  Processed {len(new_dishes)} dishes.")
     else:
-        print("All dishes already cached.")
+        print("All dishes already cached with attributes.")
 
     # Step 5: Store daily menu mapping (for rating links)
     # Build dish_id map from cached data
@@ -561,8 +576,13 @@ async def main() -> int:
             pref_vector = user.get("preference_vector")
 
             if pref_vector:
-                # Embedding-based recommendation
-                result = generate_recommendations(pref_vector, menus, cached)
+                # Embedding-based recommendation with hybrid scoring
+                result = generate_recommendations(
+                    pref_vector, menus, cached,
+                    user_cuisines=user.get("initial_categories", []),
+                    user_flavors=user.get("preferred_flavors", []),
+                    user_methods=user.get("preferred_methods", []),
+                )
                 print(f"  {recipient}: embedding-based recommendation")
             else:
                 # LLM fallback (computed once, shared for all no-pref users)

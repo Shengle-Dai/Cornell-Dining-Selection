@@ -21,6 +21,22 @@ INITIAL_WEIGHT = 1.0
 LIKED_WEIGHT = 0.5
 DISLIKED_WEIGHT = 0.3
 
+VECTOR_WEIGHT = 0.75
+FLAVOR_WEIGHT = 0.08
+METHOD_WEIGHT = 0.07
+CUISINE_WEIGHT = 0.10
+
+DISH_TYPE_MULTIPLIER = {"main": 1.0, "side": 0.6, "dessert": 0.7, "condiment": 0.3, "beverage": 0.4}
+
+
+def jaccard_similarity(a: set, b: set) -> float:
+    """Compute Jaccard similarity between two sets."""
+    if not a or not b:
+        return 0.0
+    intersection = len(a & b)
+    union = len(a | b)
+    return intersection / union if union > 0 else 0.0
+
 
 def compute_preference_vector(
     initial_ingredients: List[str],
@@ -85,11 +101,22 @@ def generate_recommendations(
     preference_vector: List[float],
     menus: Dict[str, list],
     dish_cache: Dict[str, Optional[Dict]],
+    user_cuisines: Optional[List[str]] = None,
+    user_flavors: Optional[List[str]] = None,
+    user_methods: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Generate recommendations in the same format as the current LLM output.
+    """Generate recommendations using hybrid scoring.
+
+    Scoring:
+      - VECTOR_WEIGHT * cosine_similarity(pref_vector, dish_embedding)
+      - FLAVOR_WEIGHT * jaccard(user_flavors, dish_flavor_profiles)
+      - METHOD_WEIGHT * jaccard(user_methods, dish_cooking_methods)
+      - CUISINE_WEIGHT * (1.0 if dish_cuisine in user_cuisines else 0.0)
+
+    When no attribute preferences are set, falls back to pure cosine similarity.
 
     For each meal bucket:
-      1. Score every dish by cosine similarity to preference_vector
+      1. Score every dish by hybrid score
       2. For each eatery, eatery_score = mean of top 3 dish scores
       3. Rank eateries by eatery_score, take top 3
       4. For each eatery, list top 4 dishes
@@ -103,6 +130,12 @@ def generate_recommendations(
     """
     from food_embeddings import normalize_dish_name
 
+    # Determine if we have attribute preferences
+    flavor_set = set(user_flavors) if user_flavors else set()
+    method_set = set(user_methods) if user_methods else set()
+    cuisine_set = set(c.lower() for c in user_cuisines) if user_cuisines else set()
+    has_attr_prefs = bool(flavor_set or method_set or cuisine_set)
+
     result: Dict[str, Any] = {}
 
     for bucket, slices in menus.items():
@@ -114,19 +147,45 @@ def generate_recommendations(
             for item in ms.items:
                 norm_name = normalize_dish_name(item)
                 dish_data = dish_cache.get(norm_name)
+
                 if dish_data and dish_data.get("embedding"):
-                    score = cosine_similarity(
+                    vec_score = cosine_similarity(
                         preference_vector, dish_data["embedding"]
                     )
                 else:
-                    score = 0.0
+                    vec_score = 0.0
+
+                if has_attr_prefs and dish_data:
+                    flavor_score = jaccard_similarity(
+                        flavor_set,
+                        set(dish_data.get("flavor_profiles", [])),
+                    )
+                    method_score = jaccard_similarity(
+                        method_set,
+                        set(dish_data.get("cooking_methods", [])),
+                    )
+                    dish_cuisine = dish_data.get("cuisine_type", "other").lower()
+                    cuisine_score = 1.0 if dish_cuisine in cuisine_set else 0.0
+
+                    score = (
+                        VECTOR_WEIGHT * vec_score
+                        + FLAVOR_WEIGHT * flavor_score
+                        + METHOD_WEIGHT * method_score
+                        + CUISINE_WEIGHT * cuisine_score
+                    )
+                else:
+                    score = vec_score
+
+                dish_type = dish_data.get("dish_type", "main") if dish_data else "main"
+                score *= DISH_TYPE_MULTIPLIER.get(dish_type, 0.5)
+
                 scored.append((item, score))
 
             # Sort dishes by score descending
             scored.sort(key=lambda x: x[1], reverse=True)
             eatery_dishes[ms.eatery_name] = scored
 
-        # Compute eatery scores (mean of top 3 dish scores)
+        # Compute eatery scores (mean of top 3 dish scores + ingredient variety bonus)
         eatery_scores: List[Tuple[str, float, List[Tuple[str, float]]]] = []
         for eatery, dishes in eatery_dishes.items():
             top3 = dishes[:3]
@@ -134,7 +193,19 @@ def generate_recommendations(
                 avg_score = sum(s for _, s in top3) / len(top3)
             else:
                 avg_score = 0.0
-            eatery_scores.append((eatery, avg_score, dishes))
+
+            # Ingredient variety: count unique ingredients across all dishes
+            all_ings: set = set()
+            for dish_name, _ in dishes:
+                norm = normalize_dish_name(dish_name)
+                dd = dish_cache.get(norm)
+                if dd:
+                    all_ings.update(dd.get("ingredients", []))
+            # Scale: 0 ings → 0.0, 10+ ings → 1.0
+            variety_bonus = min(len(all_ings) / 10.0, 1.0)
+            eatery_score = 0.85 * avg_score + 0.15 * variety_bonus
+
+            eatery_scores.append((eatery, eatery_score, dishes))
 
         # Sort eateries by score, take top 3
         eatery_scores.sort(key=lambda x: x[1], reverse=True)

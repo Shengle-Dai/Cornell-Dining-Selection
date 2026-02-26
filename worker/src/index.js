@@ -496,6 +496,14 @@ async function handleOnboarding(_request, _env) {
     "chicken", "beef", "pork", "tofu", "rice",
     "noodles", "seafood", "eggs", "cheese", "vegetables",
   ];
+  const flavors = [
+    "savory", "sweet", "spicy", "sour", "umami",
+    "mild", "smoky", "tangy", "rich", "fresh",
+  ];
+  const methods = [
+    "fried", "grilled", "baked", "steamed", "stir-fried",
+    "roasted", "braised", "raw", "sauteed", "smoked",
+  ];
 
   const catCheckboxes = categories
     .map(
@@ -511,6 +519,20 @@ async function handleOnboarding(_request, _env) {
     )
     .join("\n");
 
+  const flavorCheckboxes = flavors
+    .map(
+      (f) =>
+        `<label class="chip"><input type="checkbox" name="flavors" value="${f}"> ${f}</label>`
+    )
+    .join("\n");
+
+  const methodCheckboxes = methods
+    .map(
+      (m) =>
+        `<label class="chip"><input type="checkbox" name="methods" value="${m}"> ${m}</label>`
+    )
+    .join("\n");
+
   return new Response(
     pageShell(
       "Set Your Preferences",
@@ -523,6 +545,10 @@ async function handleOnboarding(_request, _env) {
         <div class="chips">${catCheckboxes}</div>
         <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Ingredients you like</h3>
         <div class="chips">${ingCheckboxes}</div>
+        <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Flavors you enjoy</h3>
+        <div class="chips">${flavorCheckboxes}</div>
+        <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Cooking styles you prefer</h3>
+        <div class="chips">${methodCheckboxes}</div>
         <button type="submit" style="margin-top:20px;">Save Preferences</button>
       </form>
       <a href="/" class="footer" style="display:block;margin-top:16px;">Skip for now</a>
@@ -543,6 +569,8 @@ async function handleOnboarding(_request, _env) {
           e.preventDefault();
           const cats = [...document.querySelectorAll('input[name="categories"]:checked')].map(i => i.value);
           const ings = [...document.querySelectorAll('input[name="ingredients"]:checked')].map(i => i.value);
+          const flavs = [...document.querySelectorAll('input[name="flavors"]:checked')].map(i => i.value);
+          const meths = [...document.querySelectorAll('input[name="methods"]:checked')].map(i => i.value);
           const accessToken = sessionStorage.getItem('sb_access_token');
           if (!accessToken) {
             alert('Session expired. Please sign in again.');
@@ -556,7 +584,7 @@ async function handleOnboarding(_request, _env) {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + accessToken,
               },
-              body: JSON.stringify({ categories: cats, ingredients: ings })
+              body: JSON.stringify({ categories: cats, ingredients: ings, flavors: flavs, methods: meths })
             });
             if (res.ok) {
               document.querySelector('.container').innerHTML =
@@ -596,6 +624,8 @@ async function handleSetPreferences(request, env) {
   const body = await request.json();
   const categories = body.categories || [];
   const ingredients = body.ingredients || [];
+  const flavors = body.flavors || [];
+  const methods = body.methods || [];
 
   // Upsert user_preferences using service role (to bypass RLS for upsert)
   const service = createServiceClient(env);
@@ -604,6 +634,8 @@ async function handleSetPreferences(request, env) {
       user_id: user.id,
       initial_categories: categories,
       initial_ingredients: ingredients,
+      preferred_flavors: flavors,
+      preferred_methods: methods,
       vector_stale: true,
       updated_at: new Date().toISOString(),
     },

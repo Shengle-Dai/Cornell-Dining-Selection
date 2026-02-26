@@ -39,6 +39,11 @@ CREATE TABLE public.dishes (
     source_name     TEXT,
     ingredients     TEXT[] NOT NULL DEFAULT '{}',
     embedding       vector(300),
+    flavor_profiles TEXT[] NOT NULL DEFAULT '{}',
+    cooking_methods TEXT[] NOT NULL DEFAULT '{}',
+    cuisine_type    TEXT NOT NULL DEFAULT 'other',
+    dietary_attrs   TEXT[] NOT NULL DEFAULT '{}',
+    dish_type       TEXT NOT NULL DEFAULT 'main',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -55,6 +60,8 @@ CREATE TABLE public.user_preferences (
     initial_ingredients    TEXT[] NOT NULL DEFAULT '{}',
     preference_vector      vector(300),
     vector_stale           BOOLEAN NOT NULL DEFAULT TRUE,
+    preferred_flavors      TEXT[] NOT NULL DEFAULT '{}',
+    preferred_methods      TEXT[] NOT NULL DEFAULT '{}',
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

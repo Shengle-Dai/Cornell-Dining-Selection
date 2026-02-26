@@ -64,7 +64,7 @@ class SupabaseClient:
 
         resp = (
             self.client.table("dishes")
-            .select("id, normalized_name, source_name, ingredients, embedding")
+            .select("id, normalized_name, source_name, ingredients, embedding, flavor_profiles, cooking_methods, cuisine_type, dietary_attrs, dish_type")
             .in_("normalized_name", names)
             .execute()
         )
@@ -76,6 +76,11 @@ class SupabaseClient:
                 "ingredients": row["ingredients"],
                 "embedding": self._vector_to_list(row.get("embedding")),
                 "source_name": row["source_name"],
+                "flavor_profiles": row.get("flavor_profiles", []),
+                "cooking_methods": row.get("cooking_methods", []),
+                "cuisine_type": row.get("cuisine_type", "other"),
+                "dietary_attrs": row.get("dietary_attrs", []),
+                "dish_type": row.get("dish_type", "main"),
             }
 
         return {n: found.get(n) for n in names}
@@ -97,6 +102,11 @@ class SupabaseClient:
                     "source_name": data.get("source_name", norm_name),
                     "ingredients": data.get("ingredients", []),
                     "embedding": data.get("embedding"),
+                    "flavor_profiles": data.get("flavor_profiles", []),
+                    "cooking_methods": data.get("cooking_methods", []),
+                    "cuisine_type": data.get("cuisine_type", "other"),
+                    "dietary_attrs": data.get("dietary_attrs", []),
+                    "dish_type": data.get("dish_type", "main"),
                     "updated_at": now,
                 }
             )
@@ -130,7 +140,7 @@ class SupabaseClient:
             .select(
                 "id, email, "
                 "user_preferences(initial_categories, initial_ingredients, "
-                "preference_vector, vector_stale)"
+                "preference_vector, vector_stale, preferred_flavors, preferred_methods)"
             )
             .eq("subscribed", True)
             .execute()
@@ -159,6 +169,12 @@ class SupabaseClient:
                     ),
                     "vector_stale": (
                         prefs.get("vector_stale", True) if prefs else True
+                    ),
+                    "preferred_flavors": (
+                        prefs.get("preferred_flavors", []) if prefs else []
+                    ),
+                    "preferred_methods": (
+                        prefs.get("preferred_methods", []) if prefs else []
                     ),
                 }
             )
