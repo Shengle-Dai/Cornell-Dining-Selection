@@ -3,6 +3,7 @@
 Uses the service role key to bypass RLS — intended for the Python pipeline only.
 """
 
+import json
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -21,6 +22,32 @@ class SupabaseClient:
                 "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars"
             )
         self.client: Client = create_client(url, key)
+
+    @staticmethod
+    def _vector_to_list(value: Any) -> Optional[List[float]]:
+        """Coerce Supabase vector/text payloads into Python float lists."""
+        if value is None:
+            return None
+        parsed = value
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+        if hasattr(parsed, "tolist"):
+            parsed = parsed.tolist()
+        if isinstance(parsed, (list, tuple)):
+            floats: List[float] = []
+            for item in parsed:
+                try:
+                    floats.append(float(item))
+                except (TypeError, ValueError):
+                    return None
+            return floats
+        return None
 
     # ─── Dishes ──────────────────────────────────────────────────────────
 
@@ -47,7 +74,7 @@ class SupabaseClient:
             found[row["normalized_name"]] = {
                 "id": row["id"],
                 "ingredients": row["ingredients"],
-                "embedding": row["embedding"],
+                "embedding": self._vector_to_list(row.get("embedding")),
                 "source_name": row["source_name"],
             }
 
@@ -126,7 +153,9 @@ class SupabaseClient:
                         prefs.get("initial_ingredients", []) if prefs else []
                     ),
                     "preference_vector": (
-                        prefs.get("preference_vector") if prefs else None
+                        self._vector_to_list(prefs.get("preference_vector"))
+                        if prefs
+                        else None
                     ),
                     "vector_stale": (
                         prefs.get("vector_stale", True) if prefs else True
@@ -161,7 +190,7 @@ class SupabaseClient:
             result.append(
                 {
                     "dish_normalized_name": dish.get("normalized_name", ""),
-                    "embedding": dish.get("embedding"),
+                    "embedding": self._vector_to_list(dish.get("embedding")),
                     "rating": row["rating"],
                     "created_at": row["created_at"],
                 }
