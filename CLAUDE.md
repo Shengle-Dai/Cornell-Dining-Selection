@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Campus Meal Pick (CMP) is an automated pipeline that scrapes daily menus from Cornell's West Campus dining halls, generates personalized recommendations using food2vec embeddings, and emails them to subscribers. Three main components:
+Campus Meal Pick (CMP) is an automated pipeline that scrapes daily menus from Cornell's West Campus dining halls, generates personalized recommendations using food2vec embeddings, and emails them to subscribers. Four main components:
 
 1. **Python recommender** (`recommend_daily.py` + `food_embeddings.py`, `ingredient_extractor.py`, `recommendation_engine.py`, `supabase_client.py`) — scrapes menus via Playwright, embeds dishes using food2vec, ranks per-user via cosine similarity, falls back to Groq LLM for users without preferences
 2. **Cloudflare Worker** (`worker/src/index.js`) — landing page with Google OAuth, onboarding, HMAC-verified email action links (rating, unsubscribe)

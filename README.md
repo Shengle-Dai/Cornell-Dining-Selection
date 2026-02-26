@@ -1,40 +1,49 @@
 # Campus Meal Pick (CMP)
 
-Automated daily AI-powered dining recommendations (top 3 picks per meal) from Cornell West Campus eateries, delivered via email.
+Automated daily AI-powered dining recommendations from Cornell West Campus eateries, personalized per-user via food2vec embeddings and delivered via email.
 
 ## How it works
 
-1. **Scrape** — Launches headless Chromium via Playwright, navigates to `now.dining.cornell.edu/eateries`, clicks the "West" campus tab, and extracts each dining hall's meal menus (categories + individual dishes)
-2. **Analyze** — Sends the scraped menu data to an LLM via the Groq API with a customizable system prompt (`prompt.md`) that encodes food preferences and decision rules
-3. **Rank** — LLM returns JSON with top 3 eatery picks per meal (breakfast/brunch, lunch, dinner), each with recommended dishes and Chinese translations
-4. **Email** — Formats the picks into a styled HTML email and sends to all subscribers via Gmail SMTP, each with a personalized HMAC-signed unsubscribe link
+1. **Scrape** — Launches headless Chromium via Playwright, navigates to Cornell dining, clicks the "West" campus tab, and extracts each dining hall's meal menus (categories + individual dishes)
+2. **Embed** — New dishes are sent to a Groq LLM for ingredient extraction, then embedded into 300-dim vectors using food2vec and cached in Supabase
+3. **Rank** — For each user, computes cosine similarity between their preference vector and dish vectors to find the top-3 eateries per meal. Users without preferences get LLM-based fallback recommendations
+4. **Email** — Formats personalized picks into a styled HTML email with HMAC-signed rating links and sends via Gmail SMTP
 
 ## Architecture
 
 ```
-┌─────────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Cloudflare Worker   │────▶│  GitHub Actions   │────▶│  Verification   │
-│  (subscription API)  │     │  (send_verif.)    │     │  Email (SMTP)   │
-└─────────────────────┘     └──────────────────┘     └─────────────────┘
-         │ KV
-         ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  GitHub Actions (daily cron)                                         │
-│  Playwright scrape → Groq LLM → Sanitize → Build HTML → Send emails │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
+│  Cloudflare Worker   │     │  Supabase             │     │  GitHub Actions  │
+│  (landing page,      │────▶│  (PostgreSQL+pgvector, │◀────│  (daily cron)    │
+│   OAuth, ratings)    │     │   Google OAuth, RLS)   │     │                  │
+└─────────────────────┘     └──────────────────────┘     └─────────────────┘
+                                       ▲
+                                       │
+                              ┌────────┴────────┐
+                              │  Python Pipeline  │
+                              │  (scrape, embed,  │
+                              │   rank, email)    │
+                              └─────────────────┘
 ```
 
-**Subscription flow:** User submits email on the Worker landing page → Worker dispatches GitHub Actions to send a verification email → User clicks confirm link → Worker verifies HMAC token and stores email in Cloudflare KV → Daily emails begin.
+**Auth flow:** Landing page → "Sign in with Google" → Supabase OAuth → callback extracts token → redirect to `/onboarding` (if no prefs) or confirmation page. Only `.edu` emails allowed (enforced by DB trigger).
+
+**Recommendation flow:** Scrape → embed new dishes → fetch user prefs from Supabase → rank dishes by cosine similarity to user preference vector → send personalized email with rating links.
+
+**Rating flow:** User clicks thumbs up/down in email → Worker validates HMAC token → upserts into `ratings` table + sets `vector_stale = TRUE` → Python pipeline recomputes preference vector on next daily run.
+
+**Unsubscribe flow:** HMAC-signed URL in email → Worker verifies → sets `profiles.subscribed = FALSE` via Supabase service role.
 
 ## Setup
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.11+
 - Node.js (for Cloudflare Worker development)
 - A [Gmail app password](https://support.google.com/accounts/answer/185833)
 - A [Groq API key](https://console.groq.com/)
-- A Cloudflare account (for the subscription Worker)
+- A Cloudflare account (for the Worker)
+- A [Supabase](https://supabase.com/) project with Google OAuth enabled
 
 ### Install
 
@@ -48,30 +57,38 @@ cd worker
 npm install
 ```
 
+### Supabase setup
+
+1. Create a Supabase project and enable the Google OAuth provider
+2. Run `supabase/schema.sql` in the SQL editor (creates tables, triggers, RLS policies, pgvector extension)
+3. Configure Google OAuth to restrict to `.edu` emails
+
 ### Environment variables
 
 Create a `.env` file in the project root:
 
 ```
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
 GROQ_API_KEY=gsk_...
 GMAIL_USER=you@gmail.com
 GMAIL_APP_PASSWORD=abcd efgh ijkl mnop
 TO_EMAIL=fallback@example.com
 HMAC_SECRET=your-secret-key
-GH_PAT_TOKEN=ghp_...
 WORKER_BASE_URL=https://your-worker.workers.dev
 ```
 
-| Variable             | Required | Description                                              |
-| -------------------- | -------- | -------------------------------------------------------- |
-| `GROQ_API_KEY`       | Yes      | Groq API key                                             |
-| `GROQ_MODEL`         | No       | Model name (default: `openai/gpt-oss-120b`)              |
-| `GMAIL_USER`         | Yes      | Gmail address used to send emails                        |
-| `GMAIL_APP_PASSWORD` | Yes      | Gmail app password                                       |
-| `TO_EMAIL`           | No       | Fallback comma-separated recipients (if KV is empty)     |
-| `HMAC_SECRET`        | Yes      | Shared secret for HMAC token signing                     |
-| `GH_PAT_TOKEN`       | Yes      | GitHub PAT with repo dispatch permission                 |
-| `WORKER_BASE_URL`    | Yes      | Base URL of the deployed Cloudflare Worker               |
+| Variable                   | Required | Description                                             |
+| -------------------------- | -------- | ------------------------------------------------------- |
+| `SUPABASE_URL`             | Yes      | Supabase project URL                                    |
+| `SUPABASE_SERVICE_ROLE_KEY`| Yes      | Supabase service role key (bypasses RLS)                |
+| `GROQ_API_KEY`             | Yes      | Groq API key for LLM calls                              |
+| `GROQ_MODEL`               | No       | Model name (default: `openai/gpt-oss-120b`)             |
+| `GMAIL_USER`               | Yes      | Gmail address used to send emails                       |
+| `GMAIL_APP_PASSWORD`       | Yes      | Gmail app password                                      |
+| `TO_EMAIL`                 | No       | Fallback comma-separated recipients (if no subscribers) |
+| `HMAC_SECRET`              | Yes      | Shared secret for HMAC token signing                    |
+| `WORKER_BASE_URL`          | Yes      | Base URL of the deployed Cloudflare Worker              |
 
 ### Cloudflare Worker setup
 
@@ -79,20 +96,16 @@ WORKER_BASE_URL=https://your-worker.workers.dev
 cd worker
 
 # Local development
-npm run sync-env    # Copies HMAC_SECRET and GH_PAT_TOKEN from ../.env to .dev.vars
+npm run sync-env    # Copies HMAC_SECRET and SUPABASE_SERVICE_ROLE_KEY from ../.env to .dev.vars
 npm run dev         # Starts local dev server at localhost:8787
 
 # Production
 wrangler secret put HMAC_SECRET
-wrangler secret put GH_PAT_TOKEN
+wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 npm run deploy
 ```
 
-The Worker's `GH_OWNER` and `GH_REPO` are configured in `wrangler.toml` under `[vars]`.
-
-### Customize recommendations
-
-Edit `prompt.md` to change food preferences, decision rules, and output style. The default prompt is tuned for a student who prefers Chinese/Asian comfort foods and includes Chinese dish name translations.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `WORKER_ORIGIN` are configured in `worker/wrangler.toml` under `[vars]`.
 
 ## Usage
 
@@ -114,6 +127,16 @@ Store the environment variables as repository secrets in GitHub.
 
 ## Configuration
 
-- **`prompt.md`** — LLM system prompt controlling food preferences and recommendation style
+- **`prompt.md`** — LLM system prompt controlling ingredient extraction and cold-start fallback recommendations
 - **Meal buckets** — `EVENT_BUCKET` in `recommend_daily.py` maps meal panel titles (Breakfast, Brunch, Lunch, Late Lunch, Dinner) to three buckets
 - **Eatery denylist** — `EATERY_DENYLIST` in `recommend_daily.py` to exclude specific eateries
+
+## Database schema
+
+Supabase PostgreSQL with pgvector:
+
+- **`profiles`** — user profiles (auto-created on OAuth sign-up via trigger), `subscribed` flag
+- **`dishes`** — normalized dish data with 300-dim pgvector embeddings
+- **`user_preferences`** — initial cuisine/ingredient prefs + computed preference vector, `vector_stale` flag
+- **`ratings`** — per-user dish ratings (+1/-1), linked to `dishes` and `daily_menus`
+- **`daily_menus`** — daily dish-to-eatery-to-bucket mapping for rating links
