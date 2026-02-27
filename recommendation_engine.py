@@ -74,7 +74,8 @@ def compute_preference_vector(
             emb = dish_data.get("embedding") if dish_data else None
         if emb:
             d_vec = np.array(emb, dtype=np.float32)
-            vec += LIKED_WEIGHT * (DECAY_FACTOR**i) * d_vec
+            strength = entry.get("strength", 1.0)
+            vec += LIKED_WEIGHT * strength * (DECAY_FACTOR**i) * d_vec
             has_signal = True
 
     # Disliked dishes (negative signal)
@@ -85,7 +86,8 @@ def compute_preference_vector(
             emb = dish_data.get("embedding") if dish_data else None
         if emb:
             d_vec = np.array(emb, dtype=np.float32)
-            vec -= DISLIKED_WEIGHT * (DECAY_FACTOR**i) * d_vec
+            strength = entry.get("strength", 1.0)
+            vec -= DISLIKED_WEIGHT * strength * (DECAY_FACTOR**i) * d_vec
             has_signal = True
 
     if not has_signal:

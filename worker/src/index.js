@@ -2,12 +2,13 @@
  * Campus Meal Pick (CMP) — Cloudflare Worker
  *
  * Endpoints:
- *   GET  /                — Landing page with "Sign in with Google" button
- *   GET  /auth/callback   — Supabase OAuth callback handler
- *   GET  /onboarding      — Preference selection page (JWT-authed)
- *   POST /api/preferences — Set initial preferences (JWT-authed)
- *   GET  /api/unsubscribe — Remove subscription (HMAC-verified email link)
- *   GET  /api/rate        — Rate a dish (HMAC-verified email link)
+ *   GET  /                        — Landing page with "Sign in with Google" button
+ *   GET  /auth/callback            — Supabase OAuth callback handler
+ *   GET  /onboarding               — Preference selection page (JWT-authed)
+ *   GET  /api/onboarding-dishes    — Fetch onboarding dish list (JWT-authed)
+ *   POST /api/preferences          — Set initial preferences + onboarding ratings (JWT-authed)
+ *   GET  /api/unsubscribe          — Remove subscription (HMAC-verified email link)
+ *   GET  /api/rate                 — Rate a dish (HMAC-verified email link)
  *
  * Env vars: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, HMAC_SECRET
  */
@@ -487,14 +488,40 @@ async function handleAuthCallback(request, env) {
   );
 }
 
+async function handleOnboardingDishes(request, env) {
+  // JWT-authenticated: fetch dishes where is_onboarding_dish = true
+  const authHeader = request.headers.get("Authorization") || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return Response.json({ error: "Missing auth token" }, { status: 401 });
+  }
+
+  const supabase = createSupabaseClient(env, authHeader);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return Response.json({ error: "Invalid or expired token" }, { status: 401 });
+  }
+
+  const { data, error } = await supabase
+    .from("dishes")
+    .select("id, source_name, cuisine_type")
+    .eq("is_onboarding_dish", true);
+
+  if (error) {
+    console.error("Onboarding dishes fetch error:", error);
+    return Response.json({ error: "Failed to fetch onboarding dishes" }, { status: 500 });
+  }
+
+  return Response.json(data || []);
+}
+
 async function handleOnboarding(_request, _env) {
   const categories = [
     "Chinese", "Japanese", "Korean", "Indian", "Mexican",
     "Italian", "American", "Mediterranean", "Thai", "Vietnamese",
-  ];
-  const ingredients = [
-    "chicken", "beef", "pork", "tofu", "rice",
-    "noodles", "seafood", "eggs", "cheese", "vegetables",
   ];
   const flavors = [
     "savory", "sweet", "spicy", "sour", "umami",
@@ -509,13 +536,6 @@ async function handleOnboarding(_request, _env) {
     .map(
       (c) =>
         `<label class="chip"><input type="checkbox" name="categories" value="${c.toLowerCase()}"> ${c}</label>`
-    )
-    .join("\n");
-
-  const ingCheckboxes = ingredients
-    .map(
-      (i) =>
-        `<label class="chip"><input type="checkbox" name="ingredients" value="${i}"> ${i}</label>`
     )
     .join("\n");
 
@@ -543,13 +563,18 @@ async function handleOnboarding(_request, _env) {
       <form id="pref-form" style="text-align:left;">
         <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Cuisines you enjoy</h3>
         <div class="chips">${catCheckboxes}</div>
-        <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Ingredients you like</h3>
-        <div class="chips">${ingCheckboxes}</div>
         <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Flavors you enjoy</h3>
         <div class="chips">${flavorCheckboxes}</div>
         <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Cooking styles you prefer</h3>
         <div class="chips">${methodCheckboxes}</div>
-        <button type="submit" style="margin-top:20px;">Save Preferences</button>
+
+        <h3 style="font-size:14px;color:var(--cornell-red);margin:24px 0 8px;">Rate these dishes (1 = dislike, 10 = love)</h3>
+        <p style="font-size:12px;color:#999;margin:0 0 12px;">Slide to rate each dish — this gives us the best signal for your taste.</p>
+        <div id="dish-sliders" style="display:flex;flex-direction:column;gap:14px;">
+          <p style="color:#aaa;font-size:13px;">Loading dishes…</p>
+        </div>
+
+        <button type="submit" style="margin-top:24px;">Save Preferences</button>
       </form>
       <a href="/" class="footer" style="display:block;margin-top:16px;">Skip for now</a>
       <style>
@@ -563,14 +588,66 @@ async function handleOnboarding(_request, _env) {
           background:var(--cornell-red); color:white; border-color:var(--cornell-red);
         }
         .chip input { display:none; }
+        .dish-card {
+          padding:10px 12px; border:1px solid #eee; border-radius:8px; background:#fafafa;
+        }
+        .dish-label {
+          display:flex; justify-content:space-between; align-items:center;
+          margin-bottom:6px;
+        }
+        .dish-name { font-size:13px; font-weight:600; color:#333; }
+        .dish-cuisine { font-size:11px; color:#999; }
+        .score-display {
+          font-size:13px; font-weight:700; color:var(--cornell-red); min-width:20px; text-align:right;
+        }
+        input[type=range] {
+          width:100%; accent-color:var(--cornell-red);
+        }
       </style>
       <script>
+        (async () => {
+          const accessToken = sessionStorage.getItem('sb_access_token');
+          const container = document.getElementById('dish-sliders');
+
+          if (!accessToken) {
+            container.innerHTML = '<p style="color:#aaa;font-size:13px;">Sign in to rate dishes.</p>';
+            return;
+          }
+
+          try {
+            const res = await fetch('/api/onboarding-dishes', {
+              headers: { 'Authorization': 'Bearer ' + accessToken }
+            });
+            const dishes = await res.json();
+            if (!dishes || dishes.length === 0) {
+              container.innerHTML = '<p style="color:#aaa;font-size:13px;">No dishes available yet — your first email will use your cuisine & flavor picks instead.</p>';
+              return;
+            }
+            container.innerHTML = dishes.map(d => \`
+              <div class="dish-card" data-dish-id="\${d.id}">
+                <div class="dish-label">
+                  <span class="dish-name">\${d.source_name || 'Unknown dish'}</span>
+                  <span><span class="score-display" id="score-\${d.id}">5</span>&nbsp;<span style="font-size:11px;color:#bbb;">/10</span></span>
+                </div>
+                <input type="range" min="1" max="10" value="5"
+                  data-dish-id="\${d.id}"
+                  oninput="document.getElementById('score-\${d.id}').textContent = this.value">
+              </div>
+            \`).join('');
+          } catch (e) {
+            container.innerHTML = '<p style="color:#aaa;font-size:13px;">Could not load dishes.</p>';
+          }
+        })();
+
         document.getElementById('pref-form').addEventListener('submit', async (e) => {
           e.preventDefault();
           const cats = [...document.querySelectorAll('input[name="categories"]:checked')].map(i => i.value);
-          const ings = [...document.querySelectorAll('input[name="ingredients"]:checked')].map(i => i.value);
           const flavs = [...document.querySelectorAll('input[name="flavors"]:checked')].map(i => i.value);
           const meths = [...document.querySelectorAll('input[name="methods"]:checked')].map(i => i.value);
+          const dishRatings = [...document.querySelectorAll('input[type=range][data-dish-id]')].map(el => ({
+            dish_id: parseInt(el.dataset.dishId, 10),
+            score: parseInt(el.value, 10),
+          }));
           const accessToken = sessionStorage.getItem('sb_access_token');
           if (!accessToken) {
             alert('Session expired. Please sign in again.');
@@ -584,7 +661,7 @@ async function handleOnboarding(_request, _env) {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + accessToken,
               },
-              body: JSON.stringify({ categories: cats, ingredients: ings, flavors: flavs, methods: meths })
+              body: JSON.stringify({ categories: cats, ingredients: [], flavors: flavs, methods: meths, dish_ratings: dishRatings })
             });
             if (res.ok) {
               document.querySelector('.container').innerHTML =
@@ -626,6 +703,7 @@ async function handleSetPreferences(request, env) {
   const ingredients = body.ingredients || [];
   const flavors = body.flavors || [];
   const methods = body.methods || [];
+  const dishRatings = body.dish_ratings || [];  // [{dish_id: int, score: int}]
 
   // Upsert user_preferences using service role (to bypass RLS for upsert)
   const service = createServiceClient(env);
@@ -645,6 +723,23 @@ async function handleSetPreferences(request, env) {
   if (error) {
     console.error("Preferences upsert error:", error);
     return Response.json({ error: "Failed to save preferences" }, { status: 500 });
+  }
+
+  // Insert onboarding dish ratings with continuous strength signal
+  if (dishRatings.length > 0) {
+    const today = new Date().toISOString().split("T")[0];
+    const rows = dishRatings.map(({ dish_id, score }) => {
+      const direction = score >= 6 ? 1 : -1;
+      const strength = Math.abs(score - 5.5) / 4.5;
+      return { user_id: user.id, dish_id, rating: direction, strength, menu_date: today };
+    });
+    const { error: ratingError } = await service
+      .from("ratings")
+      .upsert(rows, { onConflict: "user_id,dish_id,menu_date" });
+    if (ratingError) {
+      console.error("Onboarding ratings upsert error:", ratingError);
+      // Non-fatal: preferences were saved; ratings are bonus signal
+    }
   }
 
   return Response.json({ ok: true });
@@ -842,6 +937,10 @@ export default {
 
       if (path === "/onboarding" && request.method === "GET") {
         return await handleOnboarding(request, env);
+      }
+
+      if (path === "/api/onboarding-dishes" && request.method === "GET") {
+        return await handleOnboardingDishes(request, env);
       }
 
       if (path === "/api/preferences" && request.method === "POST") {

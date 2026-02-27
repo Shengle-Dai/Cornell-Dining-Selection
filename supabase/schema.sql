@@ -34,18 +34,19 @@ CREATE TRIGGER on_auth_user_created
 -- Replaces dish:{normalized_name}. 300-dim food2vec embedding.
 
 CREATE TABLE public.dishes (
-    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    normalized_name TEXT NOT NULL UNIQUE,
-    source_name     TEXT,
-    ingredients     TEXT[] NOT NULL DEFAULT '{}',
-    embedding       vector(300),
-    flavor_profiles TEXT[] NOT NULL DEFAULT '{}',
-    cooking_methods TEXT[] NOT NULL DEFAULT '{}',
-    cuisine_type    TEXT NOT NULL DEFAULT 'other',
-    dietary_attrs   TEXT[] NOT NULL DEFAULT '{}',
-    dish_type       TEXT NOT NULL DEFAULT 'main',
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    normalized_name     TEXT NOT NULL UNIQUE,
+    source_name         TEXT,
+    ingredients         TEXT[] NOT NULL DEFAULT '{}',
+    embedding           vector(300),
+    flavor_profiles     TEXT[] NOT NULL DEFAULT '{}',
+    cooking_methods     TEXT[] NOT NULL DEFAULT '{}',
+    cuisine_type        TEXT NOT NULL DEFAULT 'other',
+    dietary_attrs       TEXT[] NOT NULL DEFAULT '{}',
+    dish_type           TEXT NOT NULL DEFAULT 'main',
+    is_onboarding_dish  BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_dishes_embedding ON public.dishes
@@ -73,6 +74,7 @@ CREATE TABLE public.ratings (
     user_id     UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     dish_id     BIGINT NOT NULL REFERENCES public.dishes(id) ON DELETE CASCADE,
     rating      SMALLINT NOT NULL CHECK (rating IN (1, -1)),
+    strength    FLOAT NOT NULL DEFAULT 1.0,
     menu_date   DATE NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(user_id, dish_id, menu_date)

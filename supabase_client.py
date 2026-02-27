@@ -191,7 +191,7 @@ class SupabaseClient:
         resp = (
             self.client.table("ratings")
             .select(
-                "rating, created_at, menu_date, "
+                "rating, strength, created_at, menu_date, "
                 "dishes(normalized_name, embedding)"
             )
             .eq("user_id", user_id)
@@ -208,6 +208,7 @@ class SupabaseClient:
                     "dish_normalized_name": dish.get("normalized_name", ""),
                     "embedding": self._vector_to_list(dish.get("embedding")),
                     "rating": row["rating"],
+                    "strength": row.get("strength", 1.0),
                     "created_at": row["created_at"],
                 }
             )

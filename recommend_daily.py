@@ -527,11 +527,11 @@ async def main() -> int:
             ratings = db.get_user_ratings(user["id"])
 
             liked = [
-                {"name": r["dish_normalized_name"], "embedding": r["embedding"]}
+                {"name": r["dish_normalized_name"], "embedding": r["embedding"], "strength": r.get("strength", 1.0)}
                 for r in ratings if r["rating"] == 1
             ]
             disliked = [
-                {"name": r["dish_normalized_name"], "embedding": r["embedding"]}
+                {"name": r["dish_normalized_name"], "embedding": r["embedding"], "strength": r.get("strength", 1.0)}
                 for r in ratings if r["rating"] == -1
             ]
 
