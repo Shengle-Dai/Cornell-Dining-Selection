@@ -331,8 +331,8 @@ def build_email(
         raw_name = pick.get("eatery", "")
         name = escape(raw_name)
         dishes = pick.get("dishes", [])
-        labels = {0: "#1 Pick", 1: "#2 Pick", 2: "#3 Pick"}
-        colors = {0: "#d35400", 1: "#7f8c8d", 2: "#7f8c8d"}
+        labels = {0: "#1 Pick", 1: "#2 Pick", 2: "#3 Pick", 3: "#4 Pick"}
+        colors = {0: "#d35400", 1: "#7f8c8d", 2: "#7f8c8d", 3: "#7f8c8d"}
         label = labels.get(rank, f"#{rank+1} Pick")
         color = colors.get(rank, "#7f8c8d")
         location = escape(loc.get(raw_name, ""))
@@ -362,7 +362,7 @@ def build_email(
         if not picks:
             inner = '<p style="color:#999;">No recommendation (no matching menu found).</p>'
         else:
-            for i, p in enumerate(picks[:3]):
+            for i, p in enumerate(picks[:4]):
                 inner += _pick_html(i, p, key)
         sections_html += (
             f'<div style="margin-bottom:24px;">'

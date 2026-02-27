@@ -209,11 +209,11 @@ def generate_recommendations(
 
             eatery_scores.append((eatery, eatery_score, dishes))
 
-        # Sort eateries by score, take top 3
+        # Sort eateries by score, take top 4
         eatery_scores.sort(key=lambda x: x[1], reverse=True)
         picks = []
-        for eatery, _, dishes in eatery_scores[:3]:
-            top_dishes = [name for name, _ in dishes[:4]]
+        for eatery, _, dishes in eatery_scores[:4]:
+            top_dishes = [name for name, _ in dishes[:5]]
             picks.append({"eatery": eatery, "dishes": top_dishes})
 
         result[bucket] = {"picks": picks}
