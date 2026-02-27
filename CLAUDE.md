@@ -58,7 +58,7 @@ Dining Website → Playwright scrape → MenuSlice[] (by meal bucket)
 
 **User dashboard** (`/dashboard`): subscription toggle, dietary restrictions, taste preference chips (cuisine/flavor/method), rating history with delete. All updates via `PATCH /api/profile`.
 
-**Admin dashboard** (`/admin`, `sd924@cornell.edu` only): stat cards (subscribers, users, last menu date, eatery count), signups LineChart (30 days), ratings BarChart (14 days), top liked/disliked dishes, menu browser by date.
+**Admin dashboard** (`/admin`, `ADMIN_EMAILS` list only): stat cards (subscribers, users, last menu date, eatery count), signups LineChart (30 days), ratings BarChart (14 days), top liked/disliked dishes, menu browser by date.
 
 **Database schema (Supabase PostgreSQL + pgvector):**
 - `profiles` — user profiles (auto-created on OAuth sign-up via trigger), `subscribed` flag
@@ -97,7 +97,7 @@ Dining Website → Playwright scrape → MenuSlice[] (by meal bucket)
 Optional: `GROQ_MODEL` (default: `openai/gpt-oss-120b`)
 
 ### Pages app (`app/wrangler.toml` vars + secrets)
-- Vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `WORKER_ORIGIN`, `ADMIN_EMAIL`
+- Vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `WORKER_ORIGIN`, `ADMIN_EMAILS`
 - Secrets: `HMAC_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`
 
 ## Notable Patterns

@@ -110,7 +110,7 @@ wrangler pages secret put SUPABASE_SERVICE_ROLE_KEY
 npm run pages:deploy
 ```
 
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `WORKER_ORIGIN`, and `ADMIN_EMAIL` are configured in `app/wrangler.toml` under `[vars]`.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `WORKER_ORIGIN`, and `ADMIN_EMAILS` (comma-separated) are configured in `app/wrangler.toml` under `[vars]`.
 
 ## Usage
 

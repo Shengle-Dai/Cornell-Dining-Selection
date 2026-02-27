@@ -32,12 +32,13 @@ export async function requireAuth(request, env) {
 }
 
 /**
- * Verifies the JWT is valid AND the user's email matches ADMIN_EMAIL.
+ * Verifies the JWT is valid AND the user's email is in the ADMIN_EMAILS list.
  */
 export async function requireAdmin(request, env) {
   const { user, error, status } = await requireAuth(request, env)
   if (!user) return { user: null, error, status }
-  if (user.email !== env.ADMIN_EMAIL) {
+  const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(e => e.trim())
+  if (!adminEmails.includes(user.email)) {
     return { user: null, error: 'Forbidden', status: 403 }
   }
   return { user, error: null, status: 200 }
