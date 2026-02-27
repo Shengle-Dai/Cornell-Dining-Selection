@@ -1,0 +1,28 @@
+{
+  "name": "campus-meal-pick",
+  "version": "3.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "pages:dev": "wrangler pages dev --proxy 5173",
+    "pages:deploy": "npm run build && wrangler pages deploy dist",
+    "sync-env": "node -e \"const fs=require('fs'); const lines=fs.readFileSync('../.env','utf8').split(/\\r?\\n/); const keys=['HMAC_SECRET','SUPABASE_SERVICE_ROLE_KEY']; const out=lines.filter(l=>keys.some(k=>l.startsWith(k+'='))).join('\\n')+'\\n'; fs.writeFileSync('.dev.vars',out); console.log('Synced .dev.vars from ../.env');\""
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.0.0",
+    "recharts": "^2.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "autoprefixer": "^10.0.0",
+    "postcss": "^8.0.0",
+    "tailwindcss": "^3.0.0",
+    "vite": "^5.0.0",
+    "wrangler": "^3.0.0"
+  }
+}

@@ -1,5 +1,6 @@
 .env
 __pycache__
-worker/node_modules/
-worker/.dev.vars
-worker/.wrangler
+app/node_modules/
+app/.dev.vars
+app/.wrangler
+app/dist/

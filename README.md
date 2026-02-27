@@ -13,9 +13,9 @@ Automated daily AI-powered dining recommendations from Cornell West Campus eater
 
 ```
 ┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
-│  Cloudflare Worker   │     │  Supabase             │     │  GitHub Actions  │
-│  (landing page,      │────▶│  (PostgreSQL+pgvector, │◀────│  (daily cron)    │
-│   OAuth, ratings)    │     │   Google OAuth, RLS)   │     │                  │
+│  Cloudflare Pages    │     │  Supabase             │     │  GitHub Actions  │
+│  (React frontend +   │────▶│  (PostgreSQL+pgvector, │◀────│  (daily cron)    │
+│   Pages Functions)   │     │   Google OAuth, RLS)   │     │                  │
 └─────────────────────┘     └──────────────────────┘     └─────────────────┘
                                        ▲
                                        │
@@ -26,23 +26,27 @@ Automated daily AI-powered dining recommendations from Cornell West Campus eater
                               └─────────────────┘
 ```
 
-**Auth flow:** Landing page → "Sign in with Google" → Supabase OAuth → callback extracts token → redirect to `/onboarding` (if no prefs) or confirmation page. Only `.edu` emails allowed (enforced by DB trigger).
+**Auth flow:** Landing page → "Sign in with Google" → `supabase.auth.signInWithOAuth()` → Supabase OAuth → `/auth/callback` (React) calls `supabase.auth.setSession()` from URL hash → redirect to `/onboarding` (new user, no prefs) or `/dashboard` (returning user). Only `.edu` emails allowed (enforced by DB trigger).
 
 **Recommendation flow:** Scrape → embed new dishes → fetch user prefs from Supabase → rank dishes by hybrid score (cosine similarity + Jaccard flavor/method + cuisine match) → send personalized email with rating links.
 
-**Rating flow:** User clicks thumbs up/down in email → Worker validates HMAC token → upserts into `ratings` table + sets `vector_stale = TRUE` → Python pipeline recomputes preference vector on next daily run.
+**Rating flow:** User clicks 👍/👎 in email → Pages Function validates HMAC token → upserts into `ratings` table + sets `vector_stale = TRUE` → redirects to `/rate?status=liked&dish=NAME` (React page shows result) → Python pipeline recomputes preference vector on next daily run.
 
-**Unsubscribe flow:** HMAC-signed URL in email → Worker verifies → sets `profiles.subscribed = FALSE` via Supabase service role.
+**Unsubscribe flow:** HMAC-signed URL in email → Pages Function verifies → sets `profiles.subscribed = FALSE` → redirects to `/unsubscribe?status=success` (React page shows result).
+
+**User dashboard** (`/dashboard`): subscription toggle, dietary restrictions, taste preference chips (cuisine/flavor/method), rating history with delete. All updates via `PATCH /api/profile`.
+
+**Admin dashboard** (`/admin`, admin only): stat cards (subscribers, users, last menu date, eatery count), signups LineChart (30 days), ratings BarChart (14 days), top liked/disliked dishes, menu browser by date.
 
 ## Setup
 
 ### Prerequisites
 
 - Python 3.11+
-- Node.js (for Cloudflare Worker development)
+- Node.js (for Cloudflare Pages development)
 - A [Gmail app password](https://support.google.com/accounts/answer/185833)
 - A [Groq API key](https://console.groq.com/)
-- A Cloudflare account (for the Worker)
+- A Cloudflare account (for Pages)
 - A [Supabase](https://supabase.com/) project with Google OAuth enabled
 
 ### Install
@@ -52,8 +56,8 @@ Automated daily AI-powered dining recommendations from Cornell West Campus eater
 pip install -r requirements.txt
 python -m playwright install chromium
 
-# Cloudflare Worker
-cd worker
+# Cloudflare Pages app
+cd app
 npm install
 ```
 
@@ -88,24 +92,25 @@ WORKER_BASE_URL=https://your-worker.workers.dev
 | `GMAIL_APP_PASSWORD`       | Yes      | Gmail app password                                      |
 | `TO_EMAIL`                 | No       | Fallback comma-separated recipients (if no subscribers) |
 | `HMAC_SECRET`              | Yes      | Shared secret for HMAC token signing                    |
-| `WORKER_BASE_URL`          | Yes      | Base URL of the deployed Cloudflare Worker              |
+| `WORKER_BASE_URL`          | Yes      | Base URL of the deployed Cloudflare Pages app           |
 
-### Cloudflare Worker setup
+### Cloudflare Pages setup
 
 ```bash
-cd worker
+cd app
 
 # Local development
 npm run sync-env    # Copies HMAC_SECRET and SUPABASE_SERVICE_ROLE_KEY from ../.env to .dev.vars
-npm run dev         # Starts local dev server at localhost:8787
+npm run dev         # Vite frontend only (localhost:5173)
+npm run pages:dev   # Full Pages dev: frontend + Functions (localhost:8788)
 
 # Production
-wrangler secret put HMAC_SECRET
-wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-npm run deploy
+wrangler pages secret put HMAC_SECRET
+wrangler pages secret put SUPABASE_SERVICE_ROLE_KEY
+npm run pages:deploy
 ```
 
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `WORKER_ORIGIN` are configured in `worker/wrangler.toml` under `[vars]`.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `WORKER_ORIGIN`, and `ADMIN_EMAIL` are configured in `app/wrangler.toml` under `[vars]`.
 
 ## Usage
 
