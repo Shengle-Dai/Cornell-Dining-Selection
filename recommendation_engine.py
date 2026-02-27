@@ -26,7 +26,7 @@ FLAVOR_WEIGHT = 0.08
 METHOD_WEIGHT = 0.07
 CUISINE_WEIGHT = 0.10
 
-DISH_TYPE_MULTIPLIER = {"main": 1.0, "side": 0.6, "dessert": 0.7, "condiment": 0.3, "beverage": 0.4}
+DISH_TYPE_MULTIPLIER = {"main": 1.0, "side": 0.6, "dessert": 0.7, "condiment": 0.0, "beverage": 0.4}
 
 
 def jaccard_similarity(a: set, b: set) -> float:
@@ -213,7 +213,10 @@ def generate_recommendations(
         eatery_scores.sort(key=lambda x: x[1], reverse=True)
         picks = []
         for eatery, _, dishes in eatery_scores[:4]:
-            top_dishes = [name for name, _ in dishes[:5]]
+            top_dishes = [
+                name for name, _ in dishes
+                if (dish_cache.get(normalize_dish_name(name)) or {}).get("dish_type") != "condiment"
+            ][:5]
             picks.append({"eatery": eatery, "dishes": top_dishes})
 
         result[bucket] = {"picks": picks}
