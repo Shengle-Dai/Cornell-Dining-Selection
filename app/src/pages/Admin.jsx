@@ -371,15 +371,21 @@ const BUCKET_LABEL = {
 
 const BUCKET_ORDER = ["breakfast_brunch", "lunch", "dinner"];
 
+const DISH_TYPE_ORDER = ["main", "side", "other"];
+const DISH_TYPE_LABEL = { main: "Mains", side: "Sides", other: "Other" };
+
 function MenuGroups({ menus }) {
-  // Group: eatery → bucket → dish names
+  // Group: eatery → bucket → [{name, dtype}]
   const grouped = {};
   for (const m of menus) {
     const name = m.dishes?.source_name;
     if (!name) continue;
+    const dtype = ["main", "side"].includes(m.dishes?.dish_type)
+      ? m.dishes.dish_type
+      : "other";
     if (!grouped[m.eatery]) grouped[m.eatery] = {};
     if (!grouped[m.eatery][m.bucket]) grouped[m.eatery][m.bucket] = [];
-    grouped[m.eatery][m.bucket].push(name);
+    grouped[m.eatery][m.bucket].push({ name, dtype });
   }
 
   return (
@@ -408,16 +414,29 @@ function MenuGroups({ menus }) {
                   <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
                     {BUCKET_LABEL[bucket] ?? bucket}
                   </p>
-                  <ul className="flex flex-wrap gap-1.5">
-                    {buckets[bucket].map((dish) => (
-                      <li
-                        key={dish}
-                        className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-1"
-                      >
-                        {dish}
-                      </li>
-                    ))}
-                  </ul>
+                  {DISH_TYPE_ORDER.map((dtype) => {
+                    const dishes = buckets[bucket].filter(
+                      (d) => d.dtype === dtype,
+                    );
+                    if (dishes.length === 0) return null;
+                    return (
+                      <div key={dtype} className="mb-2 last:mb-0">
+                        <p className="text-xs font-medium text-gray-400 mb-1">
+                          {DISH_TYPE_LABEL[dtype]}
+                        </p>
+                        <ul className="flex flex-wrap gap-1.5">
+                          {dishes.map((d) => (
+                            <li
+                              key={d.name}
+                              className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-1"
+                            >
+                              {d.name}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </div>

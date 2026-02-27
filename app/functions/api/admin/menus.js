@@ -14,7 +14,7 @@ export async function onRequestGet({ request, env }) {
   const service = createServiceClient(env)
   const { data, error: dbError } = await service
     .from('daily_menus')
-    .select('id, eatery, bucket, dishes(source_name)')
+    .select('id, eatery, bucket, dishes(source_name, dish_type)')
     .eq('menu_date', date)
     .order('eatery')
 
