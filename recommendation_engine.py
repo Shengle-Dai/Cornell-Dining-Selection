@@ -29,6 +29,121 @@ CUISINE_WEIGHT = 0.10
 DISH_TYPE_MULTIPLIER = {"main": 1.0, "side": 0.6, "dessert": 0.7, "condiment": 0.0, "beverage": 0.4}
 
 
+def _scoring_weights(rating_count: int) -> Tuple[float, float, float, float]:
+    """Return (vector, cuisine, flavor, method) weights scaled by data density.
+
+    Cold-start users have noisy preference vectors from sparse ratings, so
+    we trust explicit onboarding attribute preferences (cuisine/flavor/method)
+    more heavily until enough ratings accumulate.
+    """
+    if rating_count < 15:
+        return 0.40, 0.25, 0.20, 0.15
+    elif rating_count < 40:
+        return 0.60, 0.18, 0.13, 0.09
+    else:
+        return VECTOR_WEIGHT, CUISINE_WEIGHT, FLAVOR_WEIGHT, METHOD_WEIGHT
+
+
+def weighted_attr_score(user_weights: Dict[str, float], dish_attrs: List[str]) -> float:
+    """Weighted attribute match, normalized to [0, 1].
+
+    Sums user weights for each attribute present in the dish, then divides
+    by the total positive weight mass. Negative weights clip to 0 in the result.
+    """
+    if not user_weights or not dish_attrs:
+        return 0.0
+    max_pos = sum(v for v in user_weights.values() if v > 0)
+    if max_pos == 0:
+        return 0.0
+    raw = sum(user_weights.get(attr, 0.0) for attr in dish_attrs)
+    return max(0.0, raw) / max_pos
+
+
+def weighted_cuisine_score(user_weights: Dict[str, float], dish_cuisine: str) -> float:
+    """Cuisine preference score, normalized to [0, 1]."""
+    if not user_weights or not dish_cuisine or dish_cuisine == "other":
+        return 0.0
+    max_pos = sum(v for v in user_weights.values() if v > 0)
+    if max_pos == 0:
+        return 0.0
+    return max(0.0, user_weights.get(dish_cuisine.lower(), 0.0)) / max_pos
+
+
+def infer_attribute_preferences(
+    liked_dishes: List[Dict],
+    disliked_dishes: List[Dict],
+    dish_cache: Dict[str, Optional[Dict]],
+) -> Dict[str, Dict[str, float]]:
+    """Infer continuous flavor/method/cuisine weights from rating history.
+
+    Liked signals add weight (decay × strength); disliked subtract at 0.5×.
+    Returns dicts suitable for direct storage as JSONB.
+    """
+    from collections import defaultdict
+
+    flavor_scores: Dict[str, float] = defaultdict(float)
+    method_scores: Dict[str, float] = defaultdict(float)
+    cuisine_scores: Dict[str, float] = defaultdict(float)
+
+    for i, entry in enumerate(liked_dishes):
+        dish_data = dish_cache.get(entry.get("name", ""))
+        if not dish_data:
+            continue
+        w = (DECAY_FACTOR ** i) * entry.get("strength", 1.0)
+        for f in dish_data.get("flavor_profiles", []):
+            flavor_scores[f] += w
+        for m in dish_data.get("cooking_methods", []):
+            method_scores[m] += w
+        c = dish_data.get("cuisine_type", "other")
+        if c and c != "other":
+            cuisine_scores[c] += w
+
+    for i, entry in enumerate(disliked_dishes):
+        dish_data = dish_cache.get(entry.get("name", ""))
+        if not dish_data:
+            continue
+        w = (DECAY_FACTOR ** i) * entry.get("strength", 1.0)
+        for f in dish_data.get("flavor_profiles", []):
+            flavor_scores[f] -= w * 0.5
+        for m in dish_data.get("cooking_methods", []):
+            method_scores[m] -= w * 0.5
+        c = dish_data.get("cuisine_type", "other")
+        if c and c != "other":
+            cuisine_scores[c] -= w * 0.5
+
+    return {
+        "flavor_weights": dict(flavor_scores),
+        "method_weights": dict(method_scores),
+        "cuisine_weights": dict(cuisine_scores),
+    }
+
+
+def _is_dietary_compatible(dish_attrs: set, user_dietary: set) -> bool:
+    """Return False if the dish conflicts with the user's dietary restrictions.
+
+    Only filters when the dish has non-empty dietary_attrs — unknown dishes
+    always pass through to avoid over-filtering.
+    """
+    if not dish_attrs or not user_dietary:
+        return True
+    for restriction in user_dietary:
+        if restriction == "vegetarian" and not (dish_attrs & {"vegetarian", "vegan"}):
+            return False
+        elif restriction == "vegan" and "vegan" not in dish_attrs:
+            return False
+        elif restriction == "gluten-free" and "gluten-free" not in dish_attrs:
+            return False
+        elif restriction == "dairy-free" and "dairy-free" not in dish_attrs:
+            return False
+        elif restriction == "halal" and "halal" not in dish_attrs:
+            return False
+        elif restriction == "no-nuts" and "contains-nuts" in dish_attrs:
+            return False
+        elif restriction == "no-shellfish" and "contains-shellfish" in dish_attrs:
+            return False
+    return True
+
+
 def jaccard_similarity(a: set, b: set) -> float:
     """Compute Jaccard similarity between two sets."""
     if not a or not b:
@@ -103,25 +218,31 @@ def generate_recommendations(
     preference_vector: List[float],
     menus: Dict[str, list],
     dish_cache: Dict[str, Optional[Dict]],
-    user_cuisines: Optional[List[str]] = None,
-    user_flavors: Optional[List[str]] = None,
-    user_methods: Optional[List[str]] = None,
+    flavor_weights: Optional[Dict[str, float]] = None,
+    method_weights: Optional[Dict[str, float]] = None,
+    cuisine_weights: Optional[Dict[str, float]] = None,
+    user_dietary: Optional[List[str]] = None,
+    rating_count: int = 0,
 ) -> Dict[str, Any]:
     """Generate recommendations using hybrid scoring.
 
     Scoring:
-      - VECTOR_WEIGHT * cosine_similarity(pref_vector, dish_embedding)
-      - FLAVOR_WEIGHT * jaccard(user_flavors, dish_flavor_profiles)
-      - METHOD_WEIGHT * jaccard(user_methods, dish_cooking_methods)
-      - CUISINE_WEIGHT * (1.0 if dish_cuisine in user_cuisines else 0.0)
+      - vec_w  * cosine_similarity(pref_vector, dish_embedding)
+      - flavor_w  * weighted_attr_score(flavor_weights, dish_flavor_profiles)
+      - method_w  * weighted_attr_score(method_weights, dish_cooking_methods)
+      - cuisine_w * weighted_cuisine_score(cuisine_weights, dish_cuisine)
 
-    When no attribute preferences are set, falls back to pure cosine similarity.
+    Attribute weights are continuous JSONB dicts {attr: float} — positive values
+    boost dishes, negative values penalize them (clipped to 0 in scoring).
 
-    For each meal bucket:
-      1. Score every dish by hybrid score
-      2. For each eatery, eatery_score = mean of top 3 dish scores
-      3. Rank eateries by eatery_score, take top 3
-      4. For each eatery, list top 4 dishes
+    Weights (vec/cuisine/flavor/method) adjust based on rating_count: cold-start
+    users trust explicit attribute preferences more; experienced users trust the
+    preference vector more.
+
+    Dishes incompatible with user_dietary restrictions are zeroed out
+    (only when the dish has non-empty dietary_attrs).
+
+    When no attribute weight dicts are provided, falls back to pure cosine similarity.
 
     Returns:
       {
@@ -132,11 +253,13 @@ def generate_recommendations(
     """
     from food_embeddings import normalize_dish_name
 
-    # Determine if we have attribute preferences
-    flavor_set = set(user_flavors) if user_flavors else set()
-    method_set = set(user_methods) if user_methods else set()
-    cuisine_set = set(c.lower() for c in user_cuisines) if user_cuisines else set()
-    has_attr_prefs = bool(flavor_set or method_set or cuisine_set)
+    vec_w, cuisine_w, flavor_w, method_w = _scoring_weights(rating_count)
+
+    fw = flavor_weights or {}
+    mw = method_weights or {}
+    cw = cuisine_weights or {}
+    dietary_set = set(user_dietary) if user_dietary else set()
+    has_attr_prefs = bool(fw or mw or cw)
 
     result: Dict[str, Any] = {}
 
@@ -157,23 +280,21 @@ def generate_recommendations(
                 else:
                     vec_score = 0.0
 
+                dish_attrs = set(dish_data.get("dietary_attrs", [])) if dish_data else set()
+                if not _is_dietary_compatible(dish_attrs, dietary_set):
+                    scored.append((item, 0.0))
+                    continue
+
                 if has_attr_prefs and dish_data:
-                    flavor_score = jaccard_similarity(
-                        flavor_set,
-                        set(dish_data.get("flavor_profiles", [])),
-                    )
-                    method_score = jaccard_similarity(
-                        method_set,
-                        set(dish_data.get("cooking_methods", [])),
-                    )
-                    dish_cuisine = dish_data.get("cuisine_type", "other").lower()
-                    cuisine_score = 1.0 if dish_cuisine in cuisine_set else 0.0
+                    flavor_score = weighted_attr_score(fw, dish_data.get("flavor_profiles", []))
+                    method_score = weighted_attr_score(mw, dish_data.get("cooking_methods", []))
+                    cuisine_score = weighted_cuisine_score(cw, dish_data.get("cuisine_type", "other"))
 
                     score = (
-                        VECTOR_WEIGHT * vec_score
-                        + FLAVOR_WEIGHT * flavor_score
-                        + METHOD_WEIGHT * method_score
-                        + CUISINE_WEIGHT * cuisine_score
+                        vec_w * vec_score
+                        + flavor_w * flavor_score
+                        + method_w * method_score
+                        + cuisine_w * cuisine_score
                     )
                 else:
                     score = vec_score

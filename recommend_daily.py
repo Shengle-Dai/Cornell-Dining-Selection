@@ -412,7 +412,7 @@ async def main() -> int:
     # Step 2: Load food2vec model and Supabase client
     from food_embeddings import FoodVectorModel, normalize_dish_name
     from ingredient_extractor import extract_dish_attributes_batch
-    from recommendation_engine import compute_preference_vector, generate_recommendations
+    from recommendation_engine import compute_preference_vector, generate_recommendations, infer_attribute_preferences
     from supabase_client import SupabaseClient
 
     model = FoodVectorModel()
@@ -520,7 +520,7 @@ async def main() -> int:
     else:
         print(f"Sending to {len(users)} subscriber(s).")
 
-    # Recompute stale preference vectors
+    # Recompute stale preference vectors and track rating counts
     for user in users:
         if user.get("vector_stale") and user.get("id"):
             print(f"  Recomputing preference vector for {user['email']}...")
@@ -535,6 +535,8 @@ async def main() -> int:
                 for r in ratings if r["rating"] == -1
             ]
 
+            user["_rating_count"] = len(liked) + len(disliked)
+
             new_vec = compute_preference_vector(
                 user.get("initial_ingredients", []),
                 liked,
@@ -544,6 +546,15 @@ async def main() -> int:
             )
             user["preference_vector"] = new_vec
             db.update_preference_vector(user["id"], new_vec)
+
+            inferred = infer_attribute_preferences(liked, disliked, cached)
+            if any(inferred.values()):
+                db.update_attribute_preferences(user["id"], **inferred)
+                user["flavor_weights"]  = inferred["flavor_weights"]
+                user["method_weights"]  = inferred["method_weights"]
+                user["cuisine_weights"] = inferred["cuisine_weights"]
+        elif user.get("id"):
+            user["_rating_count"] = db.get_user_rating_count(user["id"])
 
     # Step 7: Generate per-user recommendations and send emails
     gmail_user = os.environ.get("GMAIL_USER", "").strip()
@@ -579,9 +590,11 @@ async def main() -> int:
                 # Embedding-based recommendation with hybrid scoring
                 result = generate_recommendations(
                     pref_vector, menus, cached,
-                    user_cuisines=user.get("initial_categories", []),
-                    user_flavors=user.get("preferred_flavors", []),
-                    user_methods=user.get("preferred_methods", []),
+                    flavor_weights=user.get("flavor_weights", {}),
+                    method_weights=user.get("method_weights", {}),
+                    cuisine_weights=user.get("cuisine_weights", {}),
+                    user_dietary=user.get("dietary_restrictions", []),
+                    rating_count=user.get("_rating_count", 0),
                 )
                 print(f"  {recipient}: embedding-based recommendation")
             else:

@@ -34,7 +34,8 @@ Wrangler secrets (production): `wrangler secret put HMAC_SECRET` and `wrangler s
 ### Supabase Setup
 1. Create Supabase project, enable Google OAuth provider
 2. Run `supabase/schema.sql` in the SQL editor (creates tables, triggers, RLS policies, pgvector extension)
-3. Configure Google OAuth to restrict to .edu emails
+3. For existing projects, apply any outstanding migrations from `supabase/migrations/` in order
+4. Configure Google OAuth to restrict to .edu emails
 
 ## Architecture & Data Flow
 
@@ -46,7 +47,7 @@ Dining Website → Playwright scrape → MenuSlice[] (by meal bucket)
   → Build HTML email with rating links (👍👎) → Gmail SMTP per-recipient delivery
 ```
 
-**Auth flow:** Landing page → "Sign in with Google" → Supabase OAuth → callback page extracts token → redirect to `/onboarding` (if no prefs) or confirmation page. Only .edu emails allowed (enforced by DB trigger).
+**Auth flow:** Landing page → "Sign in with Google" → Supabase OAuth → callback page extracts token → redirect to `/onboarding` (if no prefs) or confirmation page. Only .edu emails allowed (enforced by DB trigger). Onboarding collects: cuisine/flavor/method chips, ingredient checkboxes (grouped by type), dietary restrictions, and 1–10 dish rating sliders for onboarding dishes; submitted as `{cuisine_weights, flavor_weights, method_weights, ingredients, dietary_restrictions, dish_ratings}` to `POST /api/preferences`.
 
 **Recommendation flow:** Scrape → extract dish attributes (ingredients, flavors, cooking methods, cuisine, dietary) + embed new dishes → fetch user prefs from Supabase → rank dishes by hybrid score (weighted cosine similarity + flavor/method Jaccard + cuisine match) → send personalized email with rating links.
 
@@ -57,7 +58,7 @@ Dining Website → Playwright scrape → MenuSlice[] (by meal bucket)
 **Database schema (Supabase PostgreSQL + pgvector):**
 - `profiles` — user profiles (auto-created on OAuth sign-up via trigger), `subscribed` flag
 - `dishes` — normalized dish data with 300-dim pgvector embeddings + `flavor_profiles`, `cooking_methods`, `cuisine_type`, `dietary_attrs`, `dish_type` (main/side/condiment/beverage/dessert)
-- `user_preferences` — initial cuisine/ingredient prefs + `preferred_flavors`, `preferred_methods` + computed preference vector, `vector_stale` flag
+- `user_preferences` — `initial_ingredients` + continuous JSONB weight dicts `flavor_weights`, `method_weights`, `cuisine_weights` (initialized 1.0 at onboarding, updated from ratings) + `dietary_restrictions` + computed preference vector, `vector_stale` flag
 - `ratings` — per-user dish ratings (+1/-1), linked to `dishes` and `daily_menus`
 - `daily_menus` — daily dish-to-eatery-to-bucket mapping for rating links
 
@@ -69,8 +70,9 @@ Dining Website → Playwright scrape → MenuSlice[] (by meal bucket)
 - `recommendation_engine.py` — `compute_preference_vector()`, `generate_recommendations()` with hybrid scoring (cosine similarity + Jaccard flavor/method + cuisine match), decay-weighted liked/disliked signals
 - `supabase_client.py` — `SupabaseClient` for dishes, user prefs, ratings, daily menu CRUD via Supabase service role key
 - `supabase/schema.sql` — Database schema with tables, triggers, RLS policies, pgvector index
+- `supabase/migrations/` — Incremental `ALTER TABLE` migrations for existing projects (run in order)
 - `prompt.md` — LLM system prompt (used for cold-start fallback and ingredient extraction)
-- `worker/src/index.js` — Cloudflare Worker with routes: `GET /`, `GET /auth/callback`, `GET /onboarding`, `POST /api/preferences`, `GET /api/unsubscribe`, `GET /api/rate`
+- `worker/src/index.js` — Cloudflare Worker with routes: `GET /`, `GET /auth/callback`, `GET /onboarding`, `GET /api/onboarding-dishes`, `POST /api/preferences`, `GET /api/unsubscribe`, `GET /api/rate`
 - `worker/wrangler.toml` — Worker config with Supabase vars
 - `.github/workflows/eatery_recommend.yml` — Daily cron + manual dispatch
 
@@ -96,8 +98,9 @@ Optional: `GROQ_MODEL` (default: `openai/gpt-oss-120b`)
 - **Google OAuth** via Supabase with .edu email restriction (enforced by DB trigger on `auth.users`)
 - **food2vec embeddings** (300-dim) stored as pgvector columns for ingredient-level dish similarity; vocabulary of 2572 food terms
 - **Preference vector**: weighted sum of initial ingredient prefs + liked dish vectors - disliked dish vectors, with exponential decay (0.95^i) for recency
-- **Hybrid scoring**: weighted sum of cosine similarity (0.55) + flavor Jaccard (0.15) + cooking method Jaccard (0.10) + cuisine match (0.20); falls back to pure cosine when user has no attribute preferences
-- **Eatery scoring**: mean of top-3 dish hybrid scores per eatery per meal bucket
+- **Hybrid scoring**: weighted sum of cosine similarity + flavor Jaccard + cooking method Jaccard + cuisine match; weights are dynamic based on `rating_count` — cold-start (<15 ratings): (0.40/0.20/0.15/0.25), mid (15–39): (0.60/0.13/0.09/0.18), experienced (40+): (0.75/0.08/0.07/0.10); falls back to pure cosine when user has no attribute preferences
+- **Dietary filtering**: dishes incompatible with `user_dietary` restrictions (vegetarian, vegan, gluten-free, dairy-free, halal, no-nuts, no-shellfish) are zeroed out; unknown dishes (empty `dietary_attrs`) always pass through
+- **Eatery scoring**: `0.85 × mean(top-3 dish scores) + 0.15 × ingredient variety bonus`; returns top-4 eateries per meal bucket; up to 5 dishes per eatery displayed, condiments excluded
 - **Cold-start fallback**: users without preferences get LLM-based recommendations (shared computation)
 - HMAC-SHA256 tokens kept for email action links (rating 👍👎, unsubscribe) — work without login
 - Python pipeline connects to Supabase directly via service role key (bypasses RLS)

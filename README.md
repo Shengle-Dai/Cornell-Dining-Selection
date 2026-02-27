@@ -28,7 +28,7 @@ Automated daily AI-powered dining recommendations from Cornell West Campus eater
 
 **Auth flow:** Landing page → "Sign in with Google" → Supabase OAuth → callback extracts token → redirect to `/onboarding` (if no prefs) or confirmation page. Only `.edu` emails allowed (enforced by DB trigger).
 
-**Recommendation flow:** Scrape → embed new dishes → fetch user prefs from Supabase → rank dishes by cosine similarity to user preference vector → send personalized email with rating links.
+**Recommendation flow:** Scrape → embed new dishes → fetch user prefs from Supabase → rank dishes by hybrid score (cosine similarity + Jaccard flavor/method + cuisine match) → send personalized email with rating links.
 
 **Rating flow:** User clicks thumbs up/down in email → Worker validates HMAC token → upserts into `ratings` table + sets `vector_stale = TRUE` → Python pipeline recomputes preference vector on next daily run.
 
@@ -136,7 +136,7 @@ Store the environment variables as repository secrets in GitHub.
 Supabase PostgreSQL with pgvector:
 
 - **`profiles`** — user profiles (auto-created on OAuth sign-up via trigger), `subscribed` flag
-- **`dishes`** — normalized dish data with 300-dim pgvector embeddings
-- **`user_preferences`** — initial cuisine/ingredient prefs + computed preference vector, `vector_stale` flag
+- **`dishes`** — normalized dish data with 300-dim pgvector embeddings + `flavor_profiles`, `cooking_methods`, `cuisine_type`, `dietary_attrs`, `dish_type` (main/side/condiment/beverage/dessert)
+- **`user_preferences`** — `initial_ingredients` + continuous JSONB weight dicts `flavor_weights`, `method_weights`, `cuisine_weights` (initialized 1.0 at onboarding, updated from ratings) + `dietary_restrictions` + computed preference vector, `vector_stale` flag
 - **`ratings`** — per-user dish ratings (+1/-1), linked to `dishes` and `daily_menus`
 - **`daily_menus`** — daily dish-to-eatery-to-bucket mapping for rating links

@@ -132,15 +132,16 @@ class SupabaseClient:
     def get_subscribed_users(self) -> List[Dict[str, Any]]:
         """Fetch all subscribed users with their preferences.
 
-        Returns list of dicts with keys: id, email, initial_categories,
-        initial_ingredients, preference_vector, vector_stale.
+        Returns list of dicts with keys: id, email, initial_ingredients,
+        preference_vector, vector_stale, flavor_weights, method_weights,
+        cuisine_weights, dietary_restrictions.
         """
         resp = (
             self.client.table("profiles")
             .select(
                 "id, email, "
-                "user_preferences(initial_categories, initial_ingredients, "
-                "preference_vector, vector_stale, preferred_flavors, preferred_methods)"
+                "user_preferences(initial_ingredients, preference_vector, vector_stale, "
+                "flavor_weights, method_weights, cuisine_weights, dietary_restrictions)"
             )
             .eq("subscribed", True)
             .execute()
@@ -156,9 +157,6 @@ class SupabaseClient:
                 {
                     "id": row["id"],
                     "email": row["email"],
-                    "initial_categories": (
-                        prefs.get("initial_categories", []) if prefs else []
-                    ),
                     "initial_ingredients": (
                         prefs.get("initial_ingredients", []) if prefs else []
                     ),
@@ -170,16 +168,32 @@ class SupabaseClient:
                     "vector_stale": (
                         prefs.get("vector_stale", True) if prefs else True
                     ),
-                    "preferred_flavors": (
-                        prefs.get("preferred_flavors", []) if prefs else []
+                    "flavor_weights": (
+                        prefs.get("flavor_weights", {}) if prefs else {}
                     ),
-                    "preferred_methods": (
-                        prefs.get("preferred_methods", []) if prefs else []
+                    "method_weights": (
+                        prefs.get("method_weights", {}) if prefs else {}
+                    ),
+                    "cuisine_weights": (
+                        prefs.get("cuisine_weights", {}) if prefs else {}
+                    ),
+                    "dietary_restrictions": (
+                        prefs.get("dietary_restrictions", []) if prefs else []
                     ),
                 }
             )
 
         return users
+
+    def get_user_rating_count(self, user_id: str) -> int:
+        """Return the total number of ratings for a user."""
+        resp = (
+            self.client.table("ratings")
+            .select("id", count="exact")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return resp.count or 0
 
     # ─── Ratings ─────────────────────────────────────────────────────────
 
@@ -225,6 +239,25 @@ class SupabaseClient:
                 "user_id": user_id,
                 "preference_vector": vector,
                 "vector_stale": False,
+                "updated_at": datetime.utcnow().isoformat() + "Z",
+            },
+            on_conflict="user_id",
+        ).execute()
+
+    def update_attribute_preferences(
+        self,
+        user_id: str,
+        flavor_weights: Dict[str, float],
+        method_weights: Dict[str, float],
+        cuisine_weights: Dict[str, float],
+    ) -> None:
+        """Update inferred continuous flavor/method/cuisine weight dicts for a user."""
+        self.client.table("user_preferences").upsert(
+            {
+                "user_id": user_id,
+                "flavor_weights": flavor_weights,
+                "method_weights": method_weights,
+                "cuisine_weights": cuisine_weights,
                 "updated_at": datetime.utcnow().isoformat() + "Z",
             },
             on_conflict="user_id",

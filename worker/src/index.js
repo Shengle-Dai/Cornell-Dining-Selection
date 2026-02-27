@@ -531,6 +531,21 @@ async function handleOnboarding(_request, _env) {
     "fried", "grilled", "baked", "steamed", "stir-fried",
     "roasted", "braised", "raw", "sauteed", "smoked",
   ];
+  const ingredientGroups = [
+    { label: "Proteins", items: ["chicken", "beef", "pork", "tofu", "shrimp", "fish", "eggs", "lamb"] },
+    { label: "Grains & Starches", items: ["rice", "noodles", "pasta", "bread", "potato"] },
+    { label: "Produce", items: ["vegetables", "mushrooms", "broccoli", "spinach", "corn", "tomato"] },
+    { label: "Dairy & Other", items: ["cheese", "beans", "lentils", "onion", "garlic"] },
+  ];
+  const dietary = [
+    { value: "vegetarian", label: "Vegetarian" },
+    { value: "vegan", label: "Vegan" },
+    { value: "gluten-free", label: "Gluten-free" },
+    { value: "dairy-free", label: "Dairy-free" },
+    { value: "halal", label: "Halal" },
+    { value: "no-nuts", label: "Nut Allergy" },
+    { value: "no-shellfish", label: "Shellfish Allergy" },
+  ];
 
   const catCheckboxes = categories
     .map(
@@ -553,6 +568,21 @@ async function handleOnboarding(_request, _env) {
     )
     .join("\n");
 
+  const ingredientCheckboxes = ingredientGroups
+    .map(
+      (g) =>
+        `<p style="font-size:12px;color:#777;margin:10px 0 4px;font-weight:600;">${g.label}</p>` +
+        `<div class="chips">${g.items.map((i) => `<label class="chip"><input type="checkbox" name="ingredients" value="${i}"> ${i}</label>`).join("\n")}</div>`
+    )
+    .join("\n");
+
+  const dietaryCheckboxes = dietary
+    .map(
+      (d) =>
+        `<label class="chip"><input type="checkbox" name="dietary" value="${d.value}"> ${d.label}</label>`
+    )
+    .join("\n");
+
   return new Response(
     pageShell(
       "Set Your Preferences",
@@ -567,6 +597,11 @@ async function handleOnboarding(_request, _env) {
         <div class="chips">${flavorCheckboxes}</div>
         <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Cooking styles you prefer</h3>
         <div class="chips">${methodCheckboxes}</div>
+        <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Ingredients you love</h3>
+        <p style="font-size:12px;color:#999;margin:0 0 8px;">Pick any ingredients you enjoy — this gives us the strongest signal for your taste.</p>
+        ${ingredientCheckboxes}
+        <h3 style="font-size:14px;color:var(--cornell-red);margin:16px 0 8px;">Dietary restrictions</h3>
+        <div class="chips">${dietaryCheckboxes}</div>
 
         <h3 style="font-size:14px;color:var(--cornell-red);margin:24px 0 8px;">Rate these dishes (1 = dislike, 10 = love)</h3>
         <p style="font-size:12px;color:#999;margin:0 0 12px;">Slide to rate each dish — this gives us the best signal for your taste.</p>
@@ -644,6 +679,11 @@ async function handleOnboarding(_request, _env) {
           const cats = [...document.querySelectorAll('input[name="categories"]:checked')].map(i => i.value);
           const flavs = [...document.querySelectorAll('input[name="flavors"]:checked')].map(i => i.value);
           const meths = [...document.querySelectorAll('input[name="methods"]:checked')].map(i => i.value);
+          const ings = [...document.querySelectorAll('input[name="ingredients"]:checked')].map(i => i.value);
+          const dietary = [...document.querySelectorAll('input[name="dietary"]:checked')].map(i => i.value);
+          const cuisineWeights = Object.fromEntries(cats.map(c => [c, 1.0]));
+          const flavorWeights  = Object.fromEntries(flavs.map(f => [f, 1.0]));
+          const methodWeights  = Object.fromEntries(meths.map(m => [m, 1.0]));
           const dishRatings = [...document.querySelectorAll('input[type=range][data-dish-id]')].map(el => ({
             dish_id: parseInt(el.dataset.dishId, 10),
             score: parseInt(el.value, 10),
@@ -661,7 +701,7 @@ async function handleOnboarding(_request, _env) {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + accessToken,
               },
-              body: JSON.stringify({ categories: cats, ingredients: [], flavors: flavs, methods: meths, dish_ratings: dishRatings })
+              body: JSON.stringify({ cuisine_weights: cuisineWeights, flavor_weights: flavorWeights, method_weights: methodWeights, ingredients: ings, dietary_restrictions: dietary, dish_ratings: dishRatings })
             });
             if (res.ok) {
               document.querySelector('.container').innerHTML =
@@ -699,10 +739,11 @@ async function handleSetPreferences(request, env) {
   }
 
   const body = await request.json();
-  const categories = body.categories || [];
+  const cuisineWeights = body.cuisine_weights || {};
+  const flavorWeights  = body.flavor_weights  || {};
+  const methodWeights  = body.method_weights  || {};
   const ingredients = body.ingredients || [];
-  const flavors = body.flavors || [];
-  const methods = body.methods || [];
+  const dietaryRestrictions = body.dietary_restrictions || [];
   const dishRatings = body.dish_ratings || [];  // [{dish_id: int, score: int}]
 
   // Upsert user_preferences using service role (to bypass RLS for upsert)
@@ -710,10 +751,11 @@ async function handleSetPreferences(request, env) {
   const { error } = await service.from("user_preferences").upsert(
     {
       user_id: user.id,
-      initial_categories: categories,
+      cuisine_weights: cuisineWeights,
+      flavor_weights: flavorWeights,
+      method_weights: methodWeights,
       initial_ingredients: ingredients,
-      preferred_flavors: flavors,
-      preferred_methods: methods,
+      dietary_restrictions: dietaryRestrictions,
       vector_stale: true,
       updated_at: new Date().toISOString(),
     },

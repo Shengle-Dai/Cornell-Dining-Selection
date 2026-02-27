@@ -57,12 +57,13 @@ CREATE INDEX idx_dishes_embedding ON public.dishes
 
 CREATE TABLE public.user_preferences (
     user_id                UUID PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
-    initial_categories     TEXT[] NOT NULL DEFAULT '{}',
     initial_ingredients    TEXT[] NOT NULL DEFAULT '{}',
     preference_vector      vector(300),
     vector_stale           BOOLEAN NOT NULL DEFAULT TRUE,
-    preferred_flavors      TEXT[] NOT NULL DEFAULT '{}',
-    preferred_methods      TEXT[] NOT NULL DEFAULT '{}',
+    flavor_weights         JSONB NOT NULL DEFAULT '{}',
+    method_weights         JSONB NOT NULL DEFAULT '{}',
+    cuisine_weights        JSONB NOT NULL DEFAULT '{}',
+    dietary_restrictions   TEXT[] NOT NULL DEFAULT '{}',
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
