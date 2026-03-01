@@ -548,11 +548,20 @@ async def main() -> int:
             db.update_preference_vector(user["id"], new_vec)
 
             inferred = infer_attribute_preferences(liked, disliked, cached)
-            if any(inferred.values()):
-                db.update_attribute_preferences(user["id"], **inferred)
-                user["flavor_weights"]  = inferred["flavor_weights"]
-                user["method_weights"]  = inferred["method_weights"]
-                user["cuisine_weights"] = inferred["cuisine_weights"]
+            # Merge inferred rating signals with existing onboarding weights so that
+            # the user's stated preferences (e.g. cuisine=1.0 from onboarding) are
+            # preserved as a baseline that ratings adjust, not overwrite.
+            merged = {}
+            for key in ("flavor_weights", "method_weights", "cuisine_weights"):
+                existing = user.get(key) or {}
+                delta = inferred.get(key, {})
+                all_keys = set(existing) | set(delta)
+                merged[key] = {k: existing.get(k, 0.0) + delta.get(k, 0.0) for k in all_keys}
+            if any(merged.values()):
+                db.update_attribute_preferences(user["id"], **merged)
+                user["flavor_weights"]  = merged["flavor_weights"]
+                user["method_weights"]  = merged["method_weights"]
+                user["cuisine_weights"] = merged["cuisine_weights"]
         elif user.get("id"):
             user["_rating_count"] = db.get_user_rating_count(user["id"])
 
